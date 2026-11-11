@@ -25,8 +25,9 @@ const at = (dayStart: Date, hour: number) => new Date(dayStart.getTime() + hour 
 
 async function main() {
   const now = new Date();
-  if (!(process.env.DATABASE_URL ?? "").startsWith("file:")) {
-    throw new Error("Seed only runs against the local SQLite demo database (DATABASE_URL=file:...). Refusing to touch another database.");
+  // The seed wipes every table. Require an explicit opt-in so it never runs against a database by accident.
+  if (process.env.ALLOW_DEMO_SEED !== "1") {
+    throw new Error("Seed deletes ALL data in DATABASE_URL. Re-run with ALLOW_DEMO_SEED=1 if this is the demo database.");
   }
   console.log("Clearing previous demo data…");
   await db.workspace.deleteMany(); // cascades to all workspace-owned rows
@@ -111,7 +112,8 @@ async function main() {
     }
     rows.push(p);
   }
-  for (let i = 0; i < rows.length; i += 5000) await db.profile.createMany({ data: rows.slice(i, i + 5000) });
+  // 2,000 rows × 16 columns stays under Postgres's 65,535 bind-parameter limit.
+  for (let i = 0; i < rows.length; i += 2000) await db.profile.createMany({ data: rows.slice(i, i + 2000) });
   console.log(`  ${PROFILES.toLocaleString("en-IN")} shopper profiles`);
 
   // ---- Pixel events (last 30 days). begin_checkout stops firing 2 days ago (theme update broke it). ----

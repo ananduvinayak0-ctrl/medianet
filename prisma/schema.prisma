@@ -1,15 +1,15 @@
 // Media.net Self-Serve Campaigns — data model (MVP)
-// Local dev runs on SQLite. Schema is kept Postgres-compatible: no SQLite-only types,
-// enums modelled as strings validated in TypeScript (src/lib/domain.ts).
-// Money is always stored as integer paise (₹1 = 100 paise).
+// Runs on Postgres (Supabase). Enums are modelled as strings validated in TypeScript
+// (src/lib/domain.ts). Money is always stored as integer paise (₹1 = 100 paise).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Supabase transaction pooler (port 6543, ?pgbouncer=true) for serverless
+  directUrl = env("DIRECT_URL") // direct/session connection (port 5432) for `prisma db push`
 }
 
 model Workspace {
