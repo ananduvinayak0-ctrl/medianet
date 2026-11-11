@@ -9,7 +9,7 @@ const NAV = [
   { href: "/dashboard", label: "Overview", icon: BarChart3 },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/ab-tests", label: "A/B tests", icon: FlaskConical },
-  { href: "/audiences", label: "Smart Personas", icon: Users },
+  { href: "/audiences", label: "Audiences", icon: Users },
   { href: "/templates", label: "Template Hub", icon: LayoutTemplate },
   { href: "/pixel", label: "Pixel health", icon: Radio },
   { href: "/wallet", label: "Wallet & billing", icon: Wallet },

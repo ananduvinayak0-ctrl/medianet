@@ -25,7 +25,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const days = Array.from({ length: 30 }, (_, i) => istDayKey(new Date(from.getTime() + i * DAY + 12 * 3600_000)));
 
   const [campaigns, buckets, alerts, pixelRows, wallet] = await Promise.all([
-    db.campaign.findMany({ where: { workspaceId: ws.id }, orderBy: { startAt: "desc" } }),
+    db.campaign.findMany({ where: { workspaceId: ws.id }, orderBy: { startAt: "desc" }, include: { customPersona: { select: { name: true } } } }),
     db.metricBucket.findMany({ where: { campaign: { workspaceId: ws.id }, bucketStart: { gte: from } } }),
     db.alert.findMany({ where: { workspaceId: ws.id, status: "open" }, orderBy: { createdAt: "desc" }, take: 6, include: { campaign: { select: { code: true, name: true } } } }),
     db.pixelEventDaily.findMany({ where: { workspaceId: ws.id } }),
@@ -119,7 +119,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <Stat
           label="Incremental lift"
           value={pooled.holdoutRate > 0 ? `${pooled.relativeLift >= 0 ? "+" : ""}${(pooled.relativeLift * 100).toFixed(0)}%` : "—"}
-          sub={pooled.status === "insufficient_data" ? "not enough data yet" : pooled.significant ? "vs holdout · statistically real" : "vs holdout · inconclusive"}
+          sub={pooled.status === "insufficient_data" ? "not enough data yet" : pooled.significant ? "vs control · statistically real" : "vs control · inconclusive"}
         />
       </div>
 
@@ -139,7 +139,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="mb-6">
-        <LiftCard lift={pooled} title="Are your retention ads creating new purchases?" scope="Pooled across campaigns active in the last 30 days: people who saw ads vs your brand-level 10% holdout." />
+        <LiftCard lift={pooled} title="Are your retention ads creating new purchases?" scope="Pooled across campaigns active in the last 30 days: people who saw ads vs your control group (fixed each quarter)." />
       </div>
 
       <Card>
@@ -178,7 +178,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <th className="px-3 py-2 text-right font-medium">Spend</th>
                 <th className="px-3 py-2 text-right font-medium">Conv.</th>
                 <th className="px-3 py-2 text-right font-medium">ROAS</th>
-                <th className="px-5 py-2 text-right font-medium">Lift vs holdout</th>
+                <th className="px-5 py-2 text-right font-medium">Lift vs control</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -196,7 +196,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                         {c.code} · {formatDate(c.startAt)} – {formatDate(c.endAt)}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-slate-700">{PERSONAS.find((p) => p.key === c.personaKey)?.name}</td>
+                    <td className="px-3 py-2.5 text-slate-700">{c.customPersona?.name ?? PERSONAS.find((p) => p.key === c.personaKey)?.name}</td>
                     <td className="px-3 py-2.5">
                       <StatusBadge status={c.status} />
                     </td>

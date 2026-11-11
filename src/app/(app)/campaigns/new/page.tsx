@@ -1,6 +1,8 @@
-import { CampaignWizard, type WizardInitial } from "@/components/wizard/campaign-wizard";
+import { CampaignWizard, type WizardCustomAudience, type WizardInitial } from "@/components/wizard/campaign-wizard";
 import { PageHeader } from "@/components/ui";
 import { DEFAULT_MDE } from "@/lib/abtest";
+import { listCustomAudiences } from "@/lib/audience-service";
+import { benchKeyFor, describeDefinition } from "@/lib/segment-defs";
 import { getBenchmark } from "@/lib/benchmarks";
 import { db } from "@/lib/db";
 import { PERSONA_KEYS, type Objective, type PersonaKey } from "@/lib/domain";
@@ -12,14 +14,17 @@ import { getTemplate, TEMPLATES } from "@/lib/templates";
 import { DAY, HOUR } from "@/lib/time";
 import { walletSummary } from "@/lib/wallet";
 
-export default async function NewCampaignPage({ searchParams }: { searchParams: Promise<{ playbook?: string; persona?: string; template?: string; draft?: string }> }) {
+export default async function NewCampaignPage({ searchParams }: { searchParams: Promise<{ playbook?: string; persona?: string; audience?: string; template?: string; draft?: string }> }) {
   const sp = await searchParams;
   const session = await getSession();
-  const [stats, wallet, draft] = await Promise.all([
+  const [stats, wallet, draft, customList] = await Promise.all([
     allAudienceStats(db, session.workspace, session.simNow),
     walletSummary(db, session.workspace.id),
     sp.draft ? db.campaign.findFirst({ where: { id: sp.draft, workspaceId: session.workspace.id, status: "draft" }, include: { abTest: true } }) : null,
+    listCustomAudiences(session),
   ]);
+  const customAudiences: WizardCustomAudience[] = customList.map((a) => ({ id: a.persona.id, name: a.persona.name, lines: describeDefinition(a.def), benchKey: benchKeyFor(a.def), stats: a.stats }));
+  const chosenCustom = customAudiences.find((a) => a.id === (draft ? draft.customPersonaId : sp.audience)) ?? null;
   const benchmarks = Object.fromEntries(
     PERSONA_KEYS.map((k) => {
       const b = getBenchmark(session.workspace.category, k);
@@ -33,7 +38,8 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
 
   const pb = getPlaybook(sp.playbook);
   const spPersona = PERSONA_KEYS.includes(sp.persona as PersonaKey) ? (sp.persona as PersonaKey) : undefined;
-  const personaKey = (draft?.personaKey ?? pb?.personaKey ?? spPersona ?? "cart_abandoners") as PersonaKey;
+  const personaKey = (chosenCustom?.benchKey ?? draft?.personaKey ?? pb?.personaKey ?? spPersona ?? "cart_abandoners") as PersonaKey;
+  const customPersonaId = chosenCustom?.id ?? null;
   const persona = getPersona(personaKey);
   const templateKey = draft?.templateKey ?? pb?.templateKey ?? (sp.template && TEMPLATES.some((t) => t.key === sp.template) ? sp.template : TEMPLATES.find((t) => t.recommendedFor.includes(personaKey))!.key);
   const t = getTemplate(templateKey);
@@ -47,6 +53,7 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         description: draft.description,
         objective: draft.objective as Objective,
         personaKey,
+        customPersonaId,
         templateKey,
         headline: draft.headline,
         body: draft.body,
@@ -62,10 +69,11 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         ab,
       }
     : {
-        name: pb ? pb.name : "",
+        name: pb ? pb.name : chosenCustom ? `${chosenCustom.name} campaign`.slice(0, 80) : "",
         description: pb?.summary ?? "",
         objective: persona.objective,
         personaKey,
+        customPersonaId,
         templateKey,
         headline: t.headline,
         body: t.body,
@@ -96,6 +104,7 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         canLaunch={can(session.role, "campaign:launch")}
         approvalRole={needsApproval(session.role, Number.MAX_SAFE_INTEGER)}
         benchmarks={benchmarks}
+        customAudiences={customAudiences}
       />
     </>
   );

@@ -100,11 +100,12 @@ export async function highValueThreshold(db: PrismaClient, workspaceId: string, 
 export interface AudienceStats {
   key: PersonaKey;
   total: number; // everyone matching the rule
-  consentWithdrawn: number; // excluded: consent withdrawn (DPDP)
+  consentWithdrawn: number; // excluded: consent withdrawn (DPDP) or opted out of ads on this channel
+  doNotContact: number; // excluded: on the global do-not-contact list
   recentBuyersExcluded: number; // excluded: bought in last 30 days
   unmatched: number; // not reachable on the channel
-  eligible: number; // reachable + consented + not excluded
-  holdout: number; // kept out of ads to measure true lift
+  eligible: number; // contactable target + comparable control
+  holdout: number; // control group: kept out of ads to measure true lift
   treated: number; // will actually see ads
 }
 
@@ -120,23 +121,24 @@ export async function audienceStats(
   const recentBuyer: Prisma.ProfileWhereInput = { lastPurchaseAt: { gte: since(now, 30) } };
   const notExcluded: Prisma.ProfileWhereInput[] = def.excludesRecentBuyers ? [{ NOT: recentBuyer }] : [];
 
-  const [total, consentWithdrawn, recentBuyersExcluded, unmatched, eligible, holdout] = await Promise.all([
+  // Rule 4 exclusions (do-not-contact list, channel opt-out, consent) and the quarterly
+  // stratified control group (Rule 3) apply to Smart Personas exactly as to custom audiences.
+  const clean: Prisma.ProfileWhereInput = { consent: "granted", adsOptOut: false, doNotContact: false };
+  const [total, doNotContact, consentWithdrawn, recentBuyersExcluded, unmatched, eligible, holdout] = await Promise.all([
     db.profile.count({ where: base }),
-    db.profile.count({ where: { AND: [base, { consent: "withdrawn" }] } }),
-    def.excludesRecentBuyers
-      ? db.profile.count({ where: { AND: [base, { consent: "granted" }, recentBuyer] } })
-      : Promise.resolve(0),
-    db.profile.count({ where: { AND: [base, { consent: "granted", matched: false }, ...notExcluded] } }),
-    db.profile.count({ where: { AND: [base, { consent: "granted", matched: true }, ...notExcluded] } }),
-    db.profile.count({
-      where: { AND: [base, { consent: "granted", matched: true, holdoutBucket: { lt: ws.holdoutPct } }, ...notExcluded] },
-    }),
+    db.profile.count({ where: { AND: [base, { doNotContact: true }] } }),
+    db.profile.count({ where: { AND: [base, { doNotContact: false }, { OR: [{ consent: "withdrawn" }, { adsOptOut: true }] }] } }),
+    def.excludesRecentBuyers ? db.profile.count({ where: { AND: [base, clean, recentBuyer] } }) : Promise.resolve(0),
+    db.profile.count({ where: { AND: [base, clean, { matched: false }, ...notExcluded] } }),
+    db.profile.count({ where: { AND: [base, clean, { matched: true }, ...notExcluded] } }),
+    db.profile.count({ where: { AND: [base, clean, { matched: true, controlGroup: true }, ...notExcluded] } }),
   ]);
 
   return {
     key,
     total,
     consentWithdrawn,
+    doNotContact,
     recentBuyersExcluded,
     unmatched,
     eligible,

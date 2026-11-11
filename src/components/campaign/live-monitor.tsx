@@ -177,7 +177,7 @@ export function LiveMonitor({ initial, canAct }: { initial: MonitorData; canAct:
 
       {data.abTest && <AbTestCard test={data.abTest} campaignId={c.id} campaignStatus={c.status} canAct={canAct} />}
 
-      {t.spendPaise > 0 && <LiftCard lift={data.lift} scope={`${formatNum(c.treatedUsers)} people could see ads; ${formatNum(c.holdoutUsers)} were held out. Same brand-level holdout across all campaigns.`} />}
+      {t.spendPaise > 0 && <LiftCard lift={data.lift} scope={`${formatNum(c.treatedUsers)} people could see ads; ${formatNum(c.holdoutUsers)} were in the control group. Same quarterly control group across all campaigns.`} />}
     </div>
   );
 }

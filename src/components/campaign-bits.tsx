@@ -62,7 +62,7 @@ export function LiftCard({ lift, title = "Did the ads actually work?", scope }: 
     <Card>
       <CardHeader
         title={title}
-        description={scope ?? "We compare people who saw ads with a 10% holdout group that didn't."}
+        description={scope ?? "We compare people who saw ads with a control group that didn't (same segments, fixed for the quarter)."}
         action={
           lift.status === "insufficient_data" ? (
             <Badge tone="neutral">Not enough data yet</Badge>

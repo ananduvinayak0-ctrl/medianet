@@ -10,7 +10,9 @@ import { Callout, Card, CardBody, CardHeader } from "@/components/ui";
 import { db } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { getMonitor } from "@/lib/monitor";
+import { definitionOf } from "@/lib/audience-service";
 import { getPersona } from "@/lib/personas";
+import { describeDefinition } from "@/lib/segment-defs";
 import { can } from "@/lib/rbac";
 import { getSession } from "@/lib/session";
 import { getTemplate } from "@/lib/templates";
@@ -18,14 +20,17 @@ import { getTemplate } from "@/lib/templates";
 export default async function CampaignPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await getSession();
-  const c = await db.campaign.findFirst({ where: { id, workspaceId: session.workspace.id } });
+  const c = await db.campaign.findFirst({ where: { id, workspaceId: session.workspace.id }, include: { customPersona: true } });
   if (!c) notFound();
   const [monitor, logs, creator] = await Promise.all([
     getMonitor(session, id),
     db.auditLog.findMany({ where: { entityId: id }, orderBy: { createdAt: "desc" }, take: 25 }),
     db.user.findUnique({ where: { id: c.createdById } }),
   ]);
-  const persona = getPersona(c.personaKey);
+  const smart = getPersona(c.personaKey);
+  const persona = c.customPersona
+    ? { name: c.customPersona.name, definition: describeDefinition(definitionOf(c.customPersona)).join(". ") + "." }
+    : { name: smart.name, definition: smart.definition };
   const template = getTemplate(c.templateKey);
   const editable = !["completed", "stopped"].includes(c.status);
 
@@ -111,7 +116,14 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
             <CardHeader title="Audience & delivery" />
             <CardBody className="space-y-2 text-sm">
               <p className="text-slate-700">
-                <span className="font-medium">{persona.name}:</span> {persona.definition}
+                {c.customPersona ? (
+                  <Link href={`/audiences/${c.customPersona.id}`} className="font-medium hover:underline">
+                    {persona.name}
+                  </Link>
+                ) : (
+                  <span className="font-medium">{persona.name}</span>
+                )}
+                : {persona.definition}
               </p>
               <p className="text-slate-500">
                 Frequency cap {c.freqCapDay}/day · {c.freqCapWeek}/week{c.offerCode ? ` · offer ${c.offerCode}` : ""}

@@ -18,9 +18,13 @@ model Workspace {
   category         String // benchmark category, e.g. food_beverage
   currency         String    @default("INR")
   timezone         String    @default("Asia/Kolkata")
-  holdoutPct       Int       @default(10) // brand-level persistent holdout (5–10)
+  holdoutPct       Int       @default(10) // control group share (5–10), applied within every stratum
   holdoutSalt      String
   aovPaise         Int // average order value
+  groupName        String? // brand group whose other brands count towards the "Potential" segment
+  // Control group (Rule 3): stratified random split, frozen for one IST quarter at a time
+  controlPeriodKey   String? // e.g. "2026-Q4"
+  controlRefreshedAt DateTime?
   storeConnectedAt DateTime?
   pixelInstalledAt DateTime?
   // Demo clock: the mock channel simulates delivery against this clock
@@ -36,6 +40,7 @@ model Workspace {
   pixelDaily  PixelEventDaily[]
   suggestions AiSuggestion[]
   alerts      Alert[]
+  personas    CustomPersona[]
 }
 
 model User {
@@ -75,12 +80,62 @@ model Profile {
   lastPurchaseAt  DateTime?
   purchaseCount   Int       @default(0)
   totalSpendPaise Int       @default(0)
+
+  // ---- Customer data for custom segmentation (Rules 1–5) ----
+  customerId                String? // CRM / loyalty ID; null = anonymous visitor or invalid record
+  lastOnlinePurchaseAt      DateTime? // this brand, online
+  lastStorePurchaseAt       DateTime? // this brand, in store
+  groupLastOnlinePurchaseAt DateTime? // other brands in the group, online
+  groupLastStorePurchaseAt  DateTime? // other brands in the group, in store
+  visits12m                 Int       @default(0) // store visits + online sessions with intent
+  valueTier                 String    @default("none") // none | low | medium | high | premium
+  fullPriceShare            Float     @default(1) // share of spend at full price (promo sensitivity)
+  lifeStage                 String    @default("unknown") // single | couple | family | unknown
+  ageBand                   String    @default("unknown")
+  incomeBand                String    @default("unknown")
+  nationality               String    @default("unknown")
+  language                  String    @default("unknown")
+  loyaltyTier               String    @default("none")
+  categories                String[]  @default([])
+  region                    String    @default("unknown")
+  homeStore                 String?
+  // Contactability (Rule 4)
+  doNotContact              Boolean   @default(false) // on the global do-not-contact list
+  adsOptOut                 Boolean   @default(false) // opted out of advertising on this channel
+  // Target / control (Rule 3), frozen per quarter
+  controlGroup              Boolean   @default(false)
+
   workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, idHash])
+  @@index([workspaceId, customerId]) // unique in practice: derived from idHash, itself unique per workspace
   @@index([workspaceId, lastPurchaseAt])
   @@index([workspaceId, cartPendingAt])
   @@index([workspaceId, lastViewAt])
+}
+
+// A brand-defined audience (the main way to build audiences). Applies Rules 1–5 in order:
+// eligibility by purchase channel → lifecycle segment from P1/P2 → optional narrowing →
+// stratified target/control → contactability. Smart Personas are presets and extra filters.
+model CustomPersona {
+  id          String     @id @default(cuid())
+  workspaceId String
+  name        String
+  description String     @default("")
+  channel     String // online | store | any
+  p1Days      Int // P1 = the last p1Days
+  p2Days      Int // P2 = the p2Days before P1
+  segments    String[] // active | inactive | potential
+  filtersJson String     @default("{}")
+  basedOn     String? // Smart Persona used as the starting point
+  createdById String
+  archivedAt  DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns   Campaign[]
+
+  @@index([workspaceId, archivedAt])
 }
 
 model PixelEventDaily {
@@ -107,7 +162,8 @@ model Campaign {
   statusReason       String?
   channel            String    @default("medianet")
   externalId         String?
-  personaKey         String
+  personaKey         String // Smart Persona, or for custom audiences the closest one (drives benchmarks)
+  customPersonaId    String?
   templateKey        String
   headline           String
   body               String
@@ -132,10 +188,11 @@ model Campaign {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  buckets   MetricBucket[]
-  alerts    Alert[]
-  abTest    AbTest?
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  customPersona CustomPersona? @relation(fields: [customPersonaId], references: [id])
+  buckets       MetricBucket[]
+  alerts        Alert[]
+  abTest        AbTest?
 
   @@index([workspaceId, status])
 }

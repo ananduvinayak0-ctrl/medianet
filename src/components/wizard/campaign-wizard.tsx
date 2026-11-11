@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarClock, Check, CheckCircle2, FlaskConical, Lock, RefreshCw, ShieldCheck, Target, Undo2, Users, XCircle } from "lucide-react";
@@ -24,6 +25,7 @@ export interface WizardInitial {
   description: string;
   objective: Objective;
   personaKey: PersonaKey;
+  customPersonaId: string | null;
   templateKey: string;
   headline: string;
   body: string;
@@ -47,6 +49,14 @@ export interface AbForm {
   mdePct: number;
 }
 
+export interface WizardCustomAudience {
+  id: string;
+  name: string;
+  lines: string[];
+  benchKey: PersonaKey;
+  stats: AudienceStats;
+}
+
 const STEPS = ["Goal", "Audience", "Budget & schedule", "Creative", "Review & launch"] as const;
 const DAY = 86_400_000;
 const IST = 330 * 60_000;
@@ -62,6 +72,7 @@ export function CampaignWizard(props: {
   canLaunch: boolean;
   approvalRole: boolean;
   benchmarks: Record<PersonaKey, { ctr: number; cpcPaise: number }>;
+  customAudiences: WizardCustomAudience[];
 }) {
   const router = useRouter();
   const [step, setStep] = useState(0);
@@ -78,7 +89,9 @@ export function CampaignWizard(props: {
   const startIso = f.startImmediately ? props.simNow : f.startAt;
   const endIso = new Date(new Date(startIso).getTime() + f.durationDays * DAY).toISOString();
   const lifetimeRupees = f.dailyBudgetRupees * f.durationDays;
-  const stats = props.audience[f.personaKey];
+  const custom = f.customPersonaId ? props.customAudiences.find((a) => a.id === f.customPersonaId) : undefined;
+  const stats = custom ? custom.stats : props.audience[f.personaKey];
+  const audienceName = custom ? custom.name : PERSONAS.find((p) => p.key === f.personaKey)?.name;
   const template = getTemplate(f.templateKey);
   const policy = useMemo(() => checkCreative(f), [f]);
   const peaks = peaksOverlapping(startIso.slice(0, 10), endIso.slice(0, 10));
@@ -108,7 +121,7 @@ export function CampaignWizard(props: {
     setSugLoading(true);
     try {
       const r = await api<{ id: string; suggestion: BudgetSuggestion }>("/api/suggestions/budget", {
-        body: { personaKey: f.personaKey, startAt: startIso, endAt: endIso, freqCapDay: f.freqCapDay },
+        body: { personaKey: f.personaKey, customPersonaId: f.customPersonaId, startAt: startIso, endAt: endIso, freqCapDay: f.freqCapDay },
       });
       setSuggestion(r.suggestion);
       setSuggestionId(r.id);
@@ -120,7 +133,7 @@ export function CampaignWizard(props: {
     }
     // startIso changes every render when "start immediately" is on; key the fetch on stable inputs instead
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f.personaKey, f.durationDays, f.freqCapDay, f.startImmediately, f.startAt]);
+  }, [f.personaKey, f.customPersonaId, f.durationDays, f.freqCapDay, f.startImmediately, f.startAt]);
 
   useEffect(() => {
     if (step === 2) fetchSuggestion();
@@ -128,13 +141,15 @@ export function CampaignWizard(props: {
 
   const chooseObjective = (o: Objective) => {
     const first = PERSONAS.find((p) => p.objective === o)!;
-    setF((s) => (s.objective === o ? s : { ...s, objective: o, personaKey: first.key }));
+    // Custom audiences work with either goal; only a Smart Persona pick is reset.
+    setF((s) => (s.objective === o ? s : { ...s, objective: o, ...(s.customPersonaId ? {} : { personaKey: first.key }) }));
   };
 
-  const choosePersona = (k: PersonaKey) => {
+  const choosePersona = (k: PersonaKey, customPersonaId: string | null = null) => {
     const rec = TEMPLATES.find((t) => t.recommendedFor.includes(k));
-    setF((s) => ({ ...s, personaKey: k, ...(rec && s.templateKey !== rec.key ? { templateKey: rec.key, headline: rec.headline, body: rec.body, cta: rec.cta } : {}) }));
+    setF((s) => ({ ...s, personaKey: k, customPersonaId, ...(rec && s.templateKey !== rec.key ? { templateKey: rec.key, headline: rec.headline, body: rec.body, cta: rec.cta } : {}) }));
   };
+  const chooseCustom = (a: WizardCustomAudience) => choosePersona(a.benchKey, a.id);
 
   const chooseTemplate = (key: string) => {
     const t = getTemplate(key);
@@ -157,6 +172,7 @@ export function CampaignWizard(props: {
       description: f.description,
       objective: f.objective,
       personaKey: f.personaKey,
+      customPersonaId: f.customPersonaId,
       templateKey: f.templateKey,
       headline: f.headline,
       body: f.body.replace("{offer}", f.offerCode || "{offer}"),
@@ -256,10 +272,61 @@ export function CampaignWizard(props: {
 
         {step === 1 && (
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-slate-700">Your audiences</span>
+              <Link href="/audiences/new" target="_blank" className="text-sm font-medium text-brand-600 hover:underline">
+                + New audience (opens in a new tab)
+              </Link>
+            </div>
+            {props.customAudiences.length === 0 && (
+              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-600">
+                No custom audiences yet. Build one from lifecycle segments and your customer data on the Audiences page, or pick a Smart Persona below.
+              </p>
+            )}
+            {props.customAudiences.map((a) => {
+              const selected = f.customPersonaId === a.id;
+              const tooSmall = a.stats.eligible < MIN_AUDIENCE;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => chooseCustom(a)}
+                  className={cn("w-full rounded-lg border bg-white p-4 text-left", selected ? "border-brand-500 ring-2 ring-brand-100" : "border-slate-200 hover:border-slate-300")}
+                  aria-pressed={selected}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Users className="size-4 text-brand-600" aria-hidden />
+                    <span className="font-medium text-slate-900">{a.name}</span>
+                    <Badge tone="neutral">Custom</Badge>
+                    {tooSmall && <Badge tone="red">Too small to launch</Badge>}
+                  </div>
+                  <ul className="mt-1 list-disc pl-5 text-sm text-slate-700">
+                    {a.lines.map((l) => (
+                      <li key={l}>{l}</li>
+                    ))}
+                  </ul>
+                  <div className="tabular mt-3 grid grid-cols-3 gap-2 text-sm">
+                    <div>
+                      <div className="text-xs text-slate-500">Will see ads</div>
+                      <div className="font-semibold">{formatNum(a.stats.treated)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Control (no ads)</div>
+                      <div className="font-semibold">{formatNum(a.stats.holdout)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Can&apos;t be contacted</div>
+                      <div className="font-semibold">{formatNum(a.stats.doNotContact + a.stats.consentWithdrawn + a.stats.unmatched)}</div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+            <div className="pt-2 text-sm font-medium text-slate-700">Smart Personas (quick picks for this goal)</div>
             {PERSONAS.filter((p) => p.objective === f.objective).map((p) => {
               const s = props.audience[p.key];
               const tooSmall = s.eligible < MIN_AUDIENCE;
-              const selected = f.personaKey === p.key;
+              const selected = !f.customPersonaId && f.personaKey === p.key;
               return (
                 <button
                   key={p.key}
@@ -282,7 +349,7 @@ export function CampaignWizard(props: {
                       <div className="font-semibold">{formatNum(s.treated)}</div>
                     </div>
                     <div>
-                      <div className="text-xs text-slate-500">Holdout (no ads)</div>
+                      <div className="text-xs text-slate-500">Control (no ads)</div>
                       <div className="font-semibold">{formatNum(s.holdout)}</div>
                     </div>
                     <div>
@@ -291,13 +358,13 @@ export function CampaignWizard(props: {
                     </div>
                     <div>
                       <div className="text-xs text-slate-500">Excluded</div>
-                      <div className="font-semibold">{formatNum(s.consentWithdrawn + s.recentBuyersExcluded)}</div>
+                      <div className="font-semibold">{formatNum(s.consentWithdrawn + s.doNotContact + s.recentBuyersExcluded)}</div>
                     </div>
                   </div>
                   {selected && (
                     <p className="mt-2 text-xs text-slate-500">
-                      Excluded: {formatNum(s.consentWithdrawn)} withdrew consent
-                      {p.excludesRecentBuyers ? `, ${formatNum(s.recentBuyersExcluded)} bought in the last 30 days (so we don't advertise what they just bought)` : ""}. Holdout stays the same across all your campaigns, so lift numbers stay honest.
+                      Excluded: {formatNum(s.doNotContact)} on the do-not-contact list, {formatNum(s.consentWithdrawn)} opted out or withdrew consent
+                      {p.excludesRecentBuyers ? `, ${formatNum(s.recentBuyersExcluded)} bought in the last 30 days (so we don't advertise what they just bought)` : ""}. The control group is fixed for the quarter across all your campaigns, so lift numbers stay honest.
                     </p>
                   )}
                 </button>
@@ -481,7 +548,7 @@ export function CampaignWizard(props: {
             <CardBody className="space-y-5">
               <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                 <Row k="Campaign" v={f.name} />
-                <Row k="Audience" v={`${PERSONAS.find((p) => p.key === f.personaKey)?.name}: ${formatNum(stats.treated)} people (+${formatNum(stats.holdout)} holdout)`} />
+                <Row k="Audience" v={`${audienceName}${custom ? " (custom)" : ""}: ${formatNum(stats.treated)} people (+${formatNum(stats.holdout)} control)`} />
                 <Row k="Schedule" v={`${f.startImmediately ? "Starts on launch" : formatDateTime(startIso)} → ${formatDateTime(endIso)}`} />
                 <Row k="Budget" v={`${formatINR(f.dailyBudgetRupees * 100)}/day · ceiling ${formatINR(lifetimeRupees * 100)}`} />
                 <Row k="Frequency cap" v={`${f.freqCapDay}/day · ${f.freqCapWeek}/week`} />
@@ -494,7 +561,8 @@ export function CampaignWizard(props: {
                 <Check2 ok={stats.eligible >= MIN_AUDIENCE} text={`Audience has at least ${formatNum(MIN_AUDIENCE)} reachable people`} />
                 <Check2 ok={policy.ok} text={policy.ok ? "Creative passes automated policy checks" : `Creative has ${policy.errors.length} policy issue(s). Fix them in step 4.`} />
                 <Check2 ok={!walletShort} text={walletShort ? "Wallet covers less than one day of budget. Top up before launching." : "Wallet covers at least one day of budget"} />
-                <Check2 ok text="10% brand holdout applied, so we can show real incremental lift" />
+                <Check2 ok text="Control group (fixed for the quarter) held out, so we can show real incremental lift" />
+                <Check2 ok text="Do-not-contact list and channel opt-outs removed before sending" />
                 {f.ab.enabled && (
                   <Check2
                     ok={abFeasible && abOk}

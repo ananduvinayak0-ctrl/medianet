@@ -17,6 +17,16 @@ Re-run `npm run db:seed` at any time to reset the demo data. The seed wipes ever
 
 Other commands: `npm test` (Vitest) · `npm run typecheck` · `npm run build`.
 
+## Sign-in (Google)
+
+Every page requires signing in with Google. Anyone with a Google account whose email is verified (Gmail or Google Workspace) can sign in; on their first visit they're added to the demo workspace as Owner and recorded in the audit log. The role switcher in the top bar still lets anyone try other roles.
+
+1. Google Cloud Console → **APIs & Services → OAuth consent screen**: User type **External**, app name, support email. Scopes: the defaults (`openid`, `email`, `profile`). Then **Publish app** (In production). While it's in "Testing", only listed test users can sign in.
+2. **Credentials → Create credentials → OAuth client ID** → Web application. Authorised redirect URIs:
+   - `http://localhost:3000/api/auth/callback/google`
+   - `https://<your-vercel-domain>/api/auth/callback/google`
+3. Put the client ID and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, set `NEXTAUTH_SECRET` (`openssl rand -base64 32`) and `NEXTAUTH_URL` (the site's URL), locally in `.env` and in Vercel's environment variables.
+
 ## Demo script (5 minutes)
 
 1. **Overview**: 30-day spend, conversions, ROAS, the North Star Metric, and incremental lift vs the 10% holdout. One open alert shows the pixel `begin_checkout` event has stopped firing.

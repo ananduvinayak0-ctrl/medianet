@@ -2,6 +2,7 @@ import type { Campaign } from "@prisma/client";
 import { z } from "zod";
 import { MDE_OPTIONS, planAbTest, simTrueEffect } from "./abtest";
 import { endTestEarly } from "./abtest-service";
+import { resolveCustomAudience } from "./audience-service";
 import { suggestBudget, type BudgetSuggestion } from "./ai/budget-suggester";
 import { AI, audit } from "./audit";
 import { getBenchmark } from "./benchmarks";
@@ -11,8 +12,9 @@ import { db } from "./db";
 import { MIN_AUDIENCE, OBJECTIVES, PERSONA_KEYS, type PersonaKey } from "./domain";
 import { AppError, badRequest, conflict, notFound, unprocessable } from "./errors";
 import { formatINR } from "./format";
-import { audienceStats, getPersona } from "./personas";
+import { audienceStats, getPersona, type AudienceStats } from "./personas";
 import { checkCreative, withUtm } from "./policy";
+import { benchKeyFor } from "./segment-defs";
 import { APPROVAL_THRESHOLD_PAISE, assertCan, can, needsApproval } from "./rbac";
 import type { Session } from "./session";
 import { TEMPLATES } from "./templates";
@@ -27,6 +29,7 @@ export const campaignInput = z
     description: z.string().trim().max(280).default(""),
     objective: z.enum(OBJECTIVES),
     personaKey: z.enum(PERSONA_KEYS),
+    customPersonaId: z.string().min(1).nullish(),
     templateKey: z.string().min(1),
     headline: z.string().trim(),
     body: z.string().trim(),
@@ -77,7 +80,13 @@ export interface AbConfig {
   mdePct: number;
 }
 
-type LaunchFields = Pick<Campaign, "personaKey" | "headline" | "body" | "cta" | "landingUrl" | "dailyBudgetPaise" | "lifetimeBudgetPaise" | "startAt" | "endAt" | "freqCapDay">;
+type LaunchFields = Pick<Campaign, "personaKey" | "customPersonaId" | "headline" | "body" | "cta" | "landingUrl" | "dailyBudgetPaise" | "lifetimeBudgetPaise" | "startAt" | "endAt" | "freqCapDay">;
+
+/** Audience numbers for a campaign: its custom audience if it has one, else its Smart Persona. */
+async function statsForCampaign(session: Session, c: Pick<Campaign, "personaKey" | "customPersonaId">): Promise<AudienceStats> {
+  if (c.customPersonaId) return (await resolveCustomAudience(session, c.customPersonaId)).stats;
+  return audienceStats(db, session.workspace, c.personaKey as PersonaKey, session.simNow);
+}
 
 function abPlanFor(session: Session, c: LaunchFields, ab: AbConfig, treatedUsers: number) {
   const start = c.startAt > session.simNow ? c.startAt : session.simNow;
@@ -95,8 +104,8 @@ function abPlanFor(session: Session, c: LaunchFields, ab: AbConfig, treatedUsers
 /** Preconditions for going live. Throws with every blocking reason. */
 async function assertLaunchable(session: Session, c: LaunchFields, ab: AbConfig | null) {
   const problems: string[] = [];
-  const stats = await audienceStats(db, session.workspace, c.personaKey as PersonaKey, session.simNow);
-  if (stats.eligible < MIN_AUDIENCE) problems.push(`Audience has ${stats.eligible} reachable people. The minimum is ${MIN_AUDIENCE}, because smaller audiences can't produce a reliable result.`);
+  const stats = await statsForCampaign(session, c);
+  if (stats.eligible < MIN_AUDIENCE) problems.push(`Audience has ${stats.eligible} contactable people (target + control). The minimum is ${MIN_AUDIENCE}, because smaller audiences can't produce a reliable result.`);
   const policy = checkCreative(c);
   problems.push(...policy.errors);
   if (ab) {
@@ -189,13 +198,23 @@ export async function saveCampaign(session: Session, raw: unknown, opts: { id?: 
   if (!parsed.success) throw badRequest("Please fix the highlighted fields", parsed.error.flatten());
   const v = parsed.data;
   if (!TEMPLATES.some((t) => t.key === v.templateKey)) throw badRequest("Unknown ad template");
-  if (getPersona(v.personaKey).objective !== v.objective) throw badRequest("That audience doesn't match the campaign goal");
+
+  // Custom audiences work with either goal; their closest Smart Persona drives benchmarks.
+  let personaKey: PersonaKey = v.personaKey;
+  if (v.customPersonaId) {
+    const custom = await db.customPersona.findFirst({ where: { id: v.customPersonaId, workspaceId: session.workspace.id, archivedAt: null } });
+    if (!custom) throw badRequest("That audience doesn't exist or has been archived");
+    personaKey = benchKeyFor((await resolveCustomAudience(session, custom.id)).def);
+  } else if (getPersona(v.personaKey).objective !== v.objective) {
+    throw badRequest("That audience doesn't match the campaign goal");
+  }
 
   const data = {
     name: v.name,
     description: v.description,
     objective: v.objective,
-    personaKey: v.personaKey,
+    personaKey,
+    customPersonaId: v.customPersonaId ?? null,
     templateKey: v.templateKey,
     headline: v.headline,
     body: v.body,
@@ -369,6 +388,7 @@ export async function cloneCampaign(session: Session, id: string): Promise<Campa
       objective: c.objective,
       status: "draft",
       personaKey: c.personaKey,
+      customPersonaId: c.customPersonaId,
       templateKey: c.templateKey,
       headline: c.headline,
       body: c.body,
@@ -453,6 +473,7 @@ export async function topUpWallet(session: Session, rupees: number): Promise<{ i
 
 export const suggestionInput = z.object({
   personaKey: z.enum(PERSONA_KEYS),
+  customPersonaId: z.string().min(1).nullish(),
   startAt: z.coerce.date(),
   endAt: z.coerce.date(),
   freqCapDay: z.number().int().min(1).max(10),
@@ -463,8 +484,10 @@ export async function createBudgetSuggestion(session: Session, raw: unknown): Pr
   if (!parsed.success) throw badRequest("Invalid suggestion request", parsed.error.flatten());
   const v = parsed.data;
   const ws = session.workspace;
-  const persona = getPersona(v.personaKey);
-  const stats = await audienceStats(db, ws, v.personaKey, session.simNow);
+  const custom = v.customPersonaId ? await resolveCustomAudience(session, v.customPersonaId) : null;
+  const benchKey = custom ? benchKeyFor(custom.def) : v.personaKey;
+  const persona = { name: custom ? custom.persona.name : getPersona(v.personaKey).name };
+  const stats = custom ? custom.stats : await audienceStats(db, ws, v.personaKey, session.simNow);
   const wallet = await walletSummary(db, ws.id);
 
   const done = await db.campaign.findMany({ where: { workspaceId: ws.id, status: { in: ["completed", "stopped"] } }, select: { id: true, personaKey: true, startAt: true, endAt: true } });
@@ -483,9 +506,9 @@ export async function createBudgetSuggestion(session: Session, raw: unknown): Pr
 
   const peak = peaksOverlapping(istDayKey(v.startAt), istDayKey(v.endAt))[0] ?? null;
   const input = {
-    personaKey: v.personaKey,
+    personaKey: benchKey,
     personaName: persona.name,
-    bench: getBenchmark(ws.category, v.personaKey),
+    bench: getBenchmark(ws.category, benchKey),
     treatedUsers: stats.treated,
     freqCapDay: v.freqCapDay,
     durationDays: daysBetween(v.startAt, v.endAt),

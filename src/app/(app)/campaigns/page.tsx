@@ -10,7 +10,7 @@ import { getSession } from "@/lib/session";
 
 export default async function CampaignsPage() {
   const session = await getSession();
-  const campaigns = await db.campaign.findMany({ where: { workspaceId: session.workspace.id }, orderBy: [{ updatedAt: "desc" }] });
+  const campaigns = await db.campaign.findMany({ where: { workspaceId: session.workspace.id }, orderBy: [{ updatedAt: "desc" }], include: { customPersona: { select: { name: true } } } });
   const groups = [
     { title: "Needs action", items: campaigns.filter((c) => ["pending_approval", "paused", "draft"].includes(c.status)) },
     { title: "Live & scheduled", items: campaigns.filter((c) => ["live", "scheduled"].includes(c.status)) },
@@ -60,7 +60,7 @@ export default async function CampaignsPage() {
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-slate-900">{c.name}</div>
                         <div className="text-xs text-slate-500">
-                          {c.code} · {getPersona(c.personaKey).name} · {formatDate(c.startAt)} – {formatDate(c.endAt)}
+                          {c.code} · {c.customPersona?.name ?? getPersona(c.personaKey).name} · {formatDate(c.startAt)} – {formatDate(c.endAt)}
                           {c.statusReason ? ` · ${c.statusReason}` : ""}
                         </div>
                       </div>

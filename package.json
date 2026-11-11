@@ -11,6 +11,7 @@
     "test": "vitest run",
     "db:push": "prisma db push",
     "db:seed": "ALLOW_DEMO_SEED=1 tsx prisma/seed.ts",
+    "db:backfill-customers": "tsx scripts/backfill-customer-data.ts",
     "setup": "prisma db push && ALLOW_DEMO_SEED=1 tsx prisma/seed.ts"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "clsx": "2.1.1",
     "lucide-react": "0.577.0",
     "next": "15.5.29",
+    "next-auth": "4.24.15",
     "react": "19.1.10",
     "react-dom": "19.1.10",
     "recharts": "2.15.4",

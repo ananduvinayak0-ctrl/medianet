@@ -5,8 +5,13 @@ import { createHash } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { getBenchmark } from "../src/lib/benchmarks";
 import type { PersonaKey } from "../src/lib/domain";
+import { refreshControlGroup } from "../src/lib/control-group";
+import { deriveCustomerAttributes } from "../src/lib/customer-attributes";
+import { createDemoAudiences, DEMO_AUDIENCES } from "../src/lib/demo-audiences";
 import { holdoutBucket } from "../src/lib/holdout";
-import { allAudienceStats, getPersona } from "../src/lib/personas";
+import { allAudienceStats, getPersona, type AudienceStats } from "../src/lib/personas";
+import { benchKeyFor, quarterKey } from "../src/lib/segment-defs";
+import { segmentFunnel, statsFromFunnel } from "../src/lib/segments";
 import { PLAYBOOKS } from "../src/lib/playbooks";
 import { seededRng } from "../src/lib/rng";
 import { simulateDelivery, type DayStat } from "../src/lib/sim/engine";
@@ -42,6 +47,7 @@ async function main() {
       holdoutPct: 10,
       holdoutSalt: sha("kaapi-salt").slice(0, 16),
       aovPaise: AOV,
+      groupName: "Kaapi Group",
       storeConnectedAt: daysAgo(now, 130),
       pixelInstalledAt: daysAgo(now, 128),
       simNow: now,
@@ -110,11 +116,17 @@ async function main() {
         p.cartValuePaise = Math.round(AOV * (0.6 + rng()));
       }
     }
-    rows.push(p);
+    rows.push({ ...p, ...deriveCustomerAttributes(p, now, AOV) });
   }
-  // 2,000 rows × 16 columns stays under Postgres's 65,535 bind-parameter limit.
-  for (let i = 0; i < rows.length; i += 2000) await db.profile.createMany({ data: rows.slice(i, i + 2000) });
+  // 1,500 rows × ~35 columns stays under Postgres's 65,535 bind-parameter limit.
+  for (let i = 0; i < rows.length; i += 1500) await db.profile.createMany({ data: rows.slice(i, i + 1500) });
   console.log(`  ${PROFILES.toLocaleString("en-IN")} shopper profiles`);
+
+  // Rule 3: this quarter's stratified control group, then example custom audiences.
+  await refreshControlGroup(db, ws, now);
+  await db.workspace.update({ where: { id: ws.id }, data: { controlPeriodKey: quarterKey(now), controlRefreshedAt: now } });
+  const demoAudiences = await createDemoAudiences(db, ws.id, users.owner.id, daysAgo(now, 70));
+  console.log(`  control group for ${quarterKey(now)} + ${Object.keys(demoAudiences).length} custom audiences`);
 
   // ---- Pixel events (last 30 days). begin_checkout stops firing 2 days ago (theme update broke it). ----
   const pixel = [];
@@ -145,7 +157,10 @@ async function main() {
   const stats = await allAudienceStats(db, ws, now);
   let seq = 1001;
 
-  type Plan = { name: string; persona: PersonaKey; startDaysAgo: number; days: number; daily: number; status: string; createdBy?: string; statusReason?: string; offer?: string };
+  type Plan = { name: string; persona: PersonaKey; audience?: string; startDaysAgo: number; days: number; daily: number; status: string; createdBy?: string; statusReason?: string; offer?: string };
+  const customStats: Record<string, AudienceStats> = {};
+  for (const a of DEMO_AUDIENCES) customStats[a.key] = statsFromFunnel(await segmentFunnel(db, { ...ws, controlPeriodKey: quarterKey(now) }, a.def, now), a.def);
+  const audiencePlan = (key: string) => benchKeyFor(DEMO_AUDIENCES.find((a) => a.key === key)!.def);
   const plans: Plan[] = [
     { name: "Monsoon cart recovery", persona: "cart_abandoners", startDaysAgo: 118, days: 14, daily: 1500, status: "completed" },
     { name: "Win back: summer lapsed", persona: "lapsed_buyers", startDaysAgo: 100, days: 21, daily: 800, status: "completed", offer: "COMEBACK15" },
@@ -159,6 +174,9 @@ async function main() {
     { name: "Post-Diwali cart recovery", persona: "cart_abandoners", startDaysAgo: 5, days: 14, daily: 2500, status: "live" },
     { name: "Win back lapsed buyers: Nov", persona: "lapsed_buyers", startDaysAgo: 1.4, days: 21, daily: 800, status: "live", offer: "COMEBACK15" },
     { name: "Repeat viewers: gifting", persona: "repeat_browsers", startDaysAgo: 3, days: 14, daily: 1000, status: "paused", statusReason: "Paused by Meera Iyer: reviewing creative" },
+    // custom audiences
+    { name: "Group shoppers: first Kaapi order", persona: audiencePlan("group_potential"), audience: "group_potential", startDaysAgo: 62, days: 14, daily: 1000, status: "completed", offer: "WELCOME10" },
+    { name: "Lapsed online regulars: Nov", persona: audiencePlan("lapsed_online"), audience: "lapsed_online", startDaysAgo: 2, days: 21, daily: 900, status: "live", offer: "COMEBACK15" },
   ];
 
   const playbookFor = (k: PersonaKey) => PLAYBOOKS.find((p) => p.personaKey === k)!;
@@ -167,7 +185,7 @@ async function main() {
     const pb = playbookFor(plan.persona);
     const t = getTemplate(pb.templateKey);
     const persona = getPersona(plan.persona);
-    const st = stats[plan.persona];
+    const st = plan.audience ? customStats[plan.audience] : stats[plan.persona];
     const jitter = 0.9 + rng() * 0.2;
     const treated = Math.round(st.treated * jitter);
     const holdout = Math.round(st.holdout * jitter);
@@ -185,6 +203,7 @@ async function main() {
         statusReason: plan.statusReason ?? (plan.status === "completed" ? "Reached end date" : null),
         externalId: `mn_${code.toLowerCase()}`,
         personaKey: plan.persona,
+        customPersonaId: plan.audience ? demoAudiences[plan.audience].id : null,
         templateKey: t.key,
         headline: t.headline,
         body: t.body.replace("{offer}", plan.offer ?? "").replace("{product}", "your pick"),
