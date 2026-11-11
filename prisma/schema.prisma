@@ -1,0 +1,233 @@
+// Media.net Self-Serve Campaigns — data model (MVP)
+// Local dev runs on SQLite. Schema is kept Postgres-compatible: no SQLite-only types,
+// enums modelled as strings validated in TypeScript (src/lib/domain.ts).
+// Money is always stored as integer paise (₹1 = 100 paise).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id               String    @id @default(cuid())
+  name             String
+  category         String // benchmark category, e.g. food_beverage
+  currency         String    @default("INR")
+  timezone         String    @default("Asia/Kolkata")
+  holdoutPct       Int       @default(10) // brand-level persistent holdout (5–10)
+  holdoutSalt      String
+  aovPaise         Int // average order value
+  storeConnectedAt DateTime?
+  pixelInstalledAt DateTime?
+  // Demo clock: the mock channel simulates delivery against this clock
+  simNow           DateTime
+  simLastRealTick  DateTime
+  createdAt        DateTime  @default(now())
+
+  memberships Membership[]
+  profiles    Profile[]
+  campaigns   Campaign[]
+  ledger      LedgerEntry[]
+  auditLogs   AuditLog[]
+  pixelDaily  PixelEventDaily[]
+  suggestions AiSuggestion[]
+  alerts      Alert[]
+}
+
+model User {
+  id          String       @id @default(cuid())
+  name        String
+  email       String       @unique
+  memberships Membership[]
+  createdAt   DateTime     @default(now())
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        String // owner | admin | editor | viewer
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+// A known shopper: pixel visitor and/or store customer. Identifiers are SHA-256 hashed
+// before they reach us (pseudonymised — still personal data under DPDP; treat as PII).
+model Profile {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  idHash          String // sha256(email) or sha256(pixel cookie id)
+  hasEmail        Boolean
+  matched         Boolean // reachable on the channel (identity match)
+  consent         String    @default("granted") // granted | withdrawn
+  holdoutBucket   Int // 0–99, deterministic from idHash + workspace salt
+  firstSeenAt     DateTime
+  lastViewAt      DateTime?
+  viewCount14d    Int       @default(0)
+  cartPendingAt   DateTime?
+  cartValuePaise  Int       @default(0)
+  lastPurchaseAt  DateTime?
+  purchaseCount   Int       @default(0)
+  totalSpendPaise Int       @default(0)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idHash])
+  @@index([workspaceId, lastPurchaseAt])
+  @@index([workspaceId, cartPendingAt])
+  @@index([workspaceId, lastViewAt])
+}
+
+model PixelEventDaily {
+  id          String    @id @default(cuid())
+  workspaceId String
+  day         String // YYYY-MM-DD (IST)
+  eventType   String // page_view | view_item | add_to_cart | begin_checkout | purchase
+  count       Int
+  duplicates  Int       @default(0)
+  withConsent Int // events carrying a consent signal
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, day, eventType])
+}
+
+model Campaign {
+  id                 String    @id @default(cuid())
+  code               String    @unique // human-readable campaign ID, e.g. CMP-1004
+  workspaceId        String
+  name               String
+  description        String    @default("")
+  objective          String // retarget | reactivate
+  status             String // draft | pending_approval | scheduled | live | paused | completed | stopped
+  statusReason       String?
+  channel            String    @default("medianet")
+  externalId         String?
+  personaKey         String
+  templateKey        String
+  headline           String
+  body               String
+  cta                String
+  landingUrl         String
+  offerCode          String?
+  dailyBudgetPaise   Int
+  lifetimeBudgetPaise Int
+  freqCapDay         Int
+  freqCapWeek        Int
+  startAt            DateTime
+  endAt              DateTime
+  audienceSize       Int       @default(0) // eligible (matched + consented) at launch
+  treatedUsers       Int       @default(0)
+  holdoutUsers       Int       @default(0)
+  totalSpendPaise    Int       @default(0) // delivered (channel-side) spend
+  simulatedUntil     DateTime? // mock channel: delivery generated up to here
+  launchedAt         DateTime?
+  createdById        String
+  clonedFromId       String?
+  suggestionId       String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  buckets   MetricBucket[]
+  alerts    Alert[]
+
+  @@index([workspaceId, status])
+}
+
+// Hourly delivery metrics (IST-aligned hours). Fractional counts are kept as floats
+// from the simulator and rounded for display.
+model MetricBucket {
+  id                   String   @id @default(cuid())
+  campaignId           String
+  bucketStart          DateTime
+  impressions          Float    @default(0)
+  clicks               Float    @default(0)
+  conversions          Float    @default(0) // last-touch attributed (7d click / 1d view)
+  returningConversions Float    @default(0)
+  revenuePaise         Int      @default(0)
+  spendPaise           Int      @default(0)
+  treatedConversions   Float    @default(0) // all purchases by treated audience (attributed or not)
+  holdoutConversions   Float    @default(0) // purchases by the holdout group
+  spendPosted          Boolean  @default(false) // reported by channel + posted to wallet ledger
+  campaign             Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, bucketStart])
+  @@index([spendPosted, bucketStart])
+}
+
+// Double-entry style wallet ledger: balance is always derived, never edited in place.
+model LedgerEntry {
+  id          String    @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  type        String // topup | spend | refund | adjustment
+  amountPaise Int // +credit / -debit
+  memo        String
+  invoiceNo   String?
+  createdAt   DateTime // demo-clock time
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+model Alert {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  campaignId     String?
+  kind           String // learning | cpa_high | ctr_fatigue | freq_saturated | lifetime_cap | wallet_empty | wallet_low | adapter_error
+  severity       String // info | warning | critical
+  message        String
+  recommendation String?
+  autoActioned   Boolean   @default(false) // true only for hard safety rules
+  status         String    @default("open") // open | dismissed | actioned | resolved
+  createdAt      DateTime
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign       Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+}
+
+model AiSuggestion {
+  id          String    @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  type        String // budget
+  inputJson   String
+  outputJson  String
+  status      String    @default("shown") // shown | accepted | edited | rejected
+  decidedById String?
+  createdAt   DateTime
+  decidedAt   DateTime?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// Append-only audit trail of every launch, pause, budget change and AI action.
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String
+  actorUserId String?
+  actorName   String
+  actorType   String // user | system | ai
+  action      String
+  entityType  String
+  entityId    String
+  summary     String
+  beforeJson  String?
+  afterJson   String?
+  createdAt   DateTime // demo-clock time
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model IdempotencyKey {
+  key       String   @id
+  response  String
+  createdAt DateTime @default(now())
+}

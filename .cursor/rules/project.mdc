@@ -1,0 +1,31 @@
+---
+description: Media.net Self-Serve Campaigns: project conventions
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Before implementing anything
+- Read `docs/01-discovery-notes.md` (decisions) and `docs/04-build-plan.md` (tickets). When `docs/PRD.md` exists, read it before implementing a feature.
+- MVP scope is **D2C brands, retention only** (retarget + reactivate), paid media, Media.net via the mock adapter. Push back on scope creep that doesn't move the North Star Metric.
+
+# Stack
+Next.js 15 App Router · React 19 · TypeScript (strict) · Tailwind v4 · hand-written shadcn-style primitives in `src/components/ui.tsx` · Prisma 6 (SQLite locally, Postgres-compatible schema) · Recharts 2 · Zod 3 · Vitest.
+
+# Layout
+- `src/app/**/page.tsx`: server components; read via Prisma/`src/lib`, never business logic.
+- `src/app/api/**/route.ts`: thin handlers wrapped in `route()` from `src/lib/api.ts`; call into `src/lib/campaign-service.ts`.
+- `src/lib/`: all domain logic. Pure modules (engine, suggester, stats, policy, rbac, calendar) must stay free of DB/IO so they are unit-testable.
+- `src/components/`: client components only where interactivity is needed.
+
+# Conventions
+- **Money is integer paise.** Format with `formatINR` (Indian grouping). Never use floats for ledger amounts.
+- **Time is IST.** Use `src/lib/time.ts` helpers; daily budgets reset at IST midnight.
+- Every state change (launch, pause, budget, approval, wallet, AI suggestion shown/decided) **must write an audit entry** via `audit()`.
+- AI is **suggest-only**: never change a campaign from an AI output without an explicit user action. Always return reasons, guardrails and inputs used.
+- Auto-actions are allowed only for hard safety rules (spend cap, wallet empty). Performance alerts suggest, and only after the learning period.
+- Check permissions with `assertCan()` in the service layer, not only in the UI.
+- Mutating client calls use `api(..., { idempotent: true })`.
+- Validate inputs with Zod in the service layer; return readable messages (non-expert users).
+- Charts: one y-axis per chart, no dual axes; series colours from `--color-series-*`.
+- Write Vitest tests for any new pure logic in `src/lib/__tests__/`.
+- Never run destructive Prisma commands (`--force-reset`, `migrate reset`) without the user's explicit consent. The seed only runs against local SQLite.
