@@ -61,7 +61,7 @@ const tones = {
   green: "bg-emerald-50 text-emerald-700",
   amber: "bg-amber-50 text-amber-800",
   red: "bg-red-50 text-red-700",
-  violet: "bg-violet-50 text-violet-700",
+  violet: "bg-brand-50 text-brand-700",
 };
 
 export function Badge({ tone = "neutral", className, ...props }: ComponentProps<"span"> & { tone?: keyof typeof tones }) {

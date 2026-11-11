@@ -16,7 +16,7 @@ export function WhyPanel({ suggestion, loading, onAccept, onReject, decision }: 
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm">
         <div className="flex items-center gap-2 font-medium text-slate-800">
-          <Sparkles className="size-4 text-violet-600" aria-hidden /> Budget Suggester
+          <Sparkles className="size-4 text-brand-600" aria-hidden /> Budget Suggester
           <Badge tone="neutral">Not enough data</Badge>
         </div>
         <p className="mt-2 text-slate-600">We don&apos;t show a number when confidence is low. A confident-looking wrong suggestion is worse than none. Start small (₹500–₹1,000/day) and we&apos;ll suggest once results come in.</p>
@@ -27,9 +27,9 @@ export function WhyPanel({ suggestion, loading, onAccept, onReject, decision }: 
   const [lo, mid, hi] = suggestion.expected.conversions;
   const [rlo, , rhi] = suggestion.expected.roas;
   return (
-    <div className="rounded-lg border border-violet-200 bg-violet-50/40 p-4">
+    <div className="rounded-lg border border-brand-200 bg-brand-50/40 p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Sparkles className="size-4 text-violet-600" aria-hidden />
+        <Sparkles className="size-4 text-brand-600" aria-hidden />
         <span className="font-medium text-slate-900">Suggested: {formatINR(suggestion.recommendedDailyPaise)}/day</span>
         <Badge tone={suggestion.confidence === "high" ? "green" : "amber"}>{suggestion.confidence} confidence</Badge>
         {decision && <Badge tone="violet">{decision}</Badge>}
@@ -40,7 +40,7 @@ export function WhyPanel({ suggestion, loading, onAccept, onReject, decision }: 
       <ul className="mt-3 space-y-1.5 text-sm text-slate-700">
         {suggestion.reasons.map((r) => (
           <li key={r} className="flex gap-2">
-            <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-violet-500" aria-hidden />
+            <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-brand-500" aria-hidden />
             <span>{r}</span>
           </li>
         ))}
@@ -53,7 +53,7 @@ export function WhyPanel({ suggestion, loading, onAccept, onReject, decision }: 
           Ignore suggestion
         </Button>
       </div>
-      <button type="button" className="mt-3 flex items-center gap-1 text-sm font-medium text-violet-700" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+      <button type="button" className="mt-3 flex items-center gap-1 text-sm font-medium text-brand-700" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <ChevronDown className={`size-4 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden /> Why this number? Guardrails & inputs
       </button>
       {open && (
@@ -63,7 +63,7 @@ export function WhyPanel({ suggestion, loading, onAccept, onReject, decision }: 
             <ul className="space-y-1">
               {suggestion.guardrails.map((g) => (
                 <li key={g.label} className="flex items-start gap-2">
-                  <ShieldCheck className={`mt-0.5 size-4 shrink-0 ${g.binding ? "text-violet-600" : "text-slate-400"}`} aria-hidden />
+                  <ShieldCheck className={`mt-0.5 size-4 shrink-0 ${g.binding ? "text-brand-600" : "text-slate-400"}`} aria-hidden />
                   <span>
                     <span className="font-medium">{g.label}</span>
                     {g.limitPaise !== null && <span className="tabular"> · {formatINR(g.limitPaise)}/day</span>}
