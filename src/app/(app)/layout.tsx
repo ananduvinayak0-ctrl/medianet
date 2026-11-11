@@ -10,7 +10,7 @@ import { walletSummary } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 
-/** Shell for every signed-in page. getSession() sends signed-out visitors to /login. */
+/** Shell for every logged-in page. getSession() sends logged-out visitors to /login. */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   const [wallet, openAlerts] = await Promise.all([
@@ -39,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <span className="tabular font-medium">{formatINR(Math.max(0, wallet.availablePaise))}</span>
             </Link>
             <RoleSwitcher role={session.role} userName={session.user.name} />
-            <UserMenu name={session.user.name} email={session.user.email} image={session.image} />
+            <UserMenu />
           </div>
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">{children}</main>

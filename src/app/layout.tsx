@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Media.net Campaigns: Self-serve retention ads",
+  title: "Adbiz: Self-serve retention ads",
   description: "Launch and optimise retention campaigns with guided setup and explainable AI.",
 };
 

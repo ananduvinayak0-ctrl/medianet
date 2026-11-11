@@ -28,8 +28,8 @@ export function Sidebar({ openAlerts }: { openAlerts: number }) {
       <div className="flex items-center gap-2 px-5 py-4">
         <Gauge className="size-6 text-brand-600" aria-hidden />
         <div className="leading-tight">
-          <div className="text-sm font-semibold text-slate-900">Media.net</div>
-          <div className="text-xs text-slate-500">Self-serve campaigns</div>
+          <div className="text-sm font-semibold text-slate-900">Adbiz</div>
+          <div className="text-xs text-slate-500">Self-serve retention ads</div>
         </div>
       </div>
       <div className="px-3">

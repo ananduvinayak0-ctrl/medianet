@@ -1,6 +1,6 @@
-# Media.net Self-Serve Campaigns (MVP)
+# Adbiz (MVP)
 
-A self-serve retention advertising tool for D2C brands: guided campaign setup, explainable AI budget suggestions, a near real-time Live Monitor, and honest measurement against a holdout group.
+Adbiz is a self-serve retention advertising tool for D2C brands: custom audience segmentation, guided campaign setup, A/B testing, explainable AI budget suggestions, a near real-time Live Monitor, and honest measurement against a control group.
 
 Ad delivery runs through a **mock Media.net channel adapter** on a **demo clock** (120× real time by default), so the whole product can be demoed without ad-account credentials.
 
@@ -17,15 +17,9 @@ Re-run `npm run db:seed` at any time to reset the demo data. The seed wipes ever
 
 Other commands: `npm test` (Vitest) · `npm run typecheck` · `npm run build`.
 
-## Sign-in (Google)
+## Login
 
-Every page requires signing in with Google. Anyone with a Google account whose email is verified (Gmail or Google Workspace) can sign in; on their first visit they're added to the demo workspace as Owner and recorded in the audit log. The role switcher in the top bar still lets anyone try other roles.
-
-1. Google Cloud Console → **APIs & Services → OAuth consent screen**: User type **External**, app name, support email. Scopes: the defaults (`openid`, `email`, `profile`). Then **Publish app** (In production). While it's in "Testing", only listed test users can sign in.
-2. **Credentials → Create credentials → OAuth client ID** → Web application. Authorised redirect URIs:
-   - `http://localhost:3000/api/auth/callback/google`
-   - `https://<your-vercel-domain>/api/auth/callback/google`
-3. Put the client ID and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, set `NEXTAUTH_SECRET` (`openssl rand -base64 32`) and `NEXTAUTH_URL` (the site's URL), locally in `.env` and in Vercel's environment variables.
+Every page sits behind `/login`, but access is open: there's no username or password, and anyone with the link can log in with one click. Once in, the role switcher in the top bar picks which demo team member (Owner, Admin, Editor, Viewer) you act as. **Log out** clears the session. No extra environment variables are needed.
 
 ## Demo script (5 minutes)
 
