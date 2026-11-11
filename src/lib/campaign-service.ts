@@ -1,5 +1,7 @@
 import type { Campaign } from "@prisma/client";
 import { z } from "zod";
+import { MDE_OPTIONS, planAbTest, simTrueEffect } from "./abtest";
+import { endTestEarly } from "./abtest-service";
 import { suggestBudget, type BudgetSuggestion } from "./ai/budget-suggester";
 import { AI, audit } from "./audit";
 import { getBenchmark } from "./benchmarks";
@@ -45,6 +47,14 @@ export const campaignInput = z
     freqCapWeek: z.number().int().min(1).max(50),
     suggestionId: z.string().optional(),
     suggestionDecision: z.enum(["accepted", "edited", "rejected"]).optional(),
+    abTest: z
+      .object({
+        headline: z.string().trim(),
+        body: z.string().trim(),
+        cta: z.string(),
+        mdePct: z.number().int().refine((n) => (MDE_OPTIONS as readonly number[]).includes(n), "Pick one of the offered effect sizes"),
+      })
+      .nullish(),
   })
   .superRefine((v, ctx) => {
     if (v.lifetimeBudgetRupees < v.dailyBudgetRupees) ctx.addIssue({ code: "custom", path: ["lifetimeBudgetRupees"], message: "Lifetime budget can't be lower than the daily budget" });
@@ -60,13 +70,40 @@ async function nextCode(): Promise<string> {
   return `CMP-${1001 + n}`;
 }
 
+export interface AbConfig {
+  headline: string;
+  body: string;
+  cta: string;
+  mdePct: number;
+}
+
+type LaunchFields = Pick<Campaign, "personaKey" | "headline" | "body" | "cta" | "landingUrl" | "dailyBudgetPaise" | "lifetimeBudgetPaise" | "startAt" | "endAt" | "freqCapDay">;
+
+function abPlanFor(session: Session, c: LaunchFields, ab: AbConfig, treatedUsers: number) {
+  const start = c.startAt > session.simNow ? c.startAt : session.simNow;
+  return planAbTest({
+    bench: getBenchmark(session.workspace.category, c.personaKey as PersonaKey),
+    mdePct: ab.mdePct,
+    dailyBudgetPaise: c.dailyBudgetPaise,
+    lifetimeBudgetPaise: c.lifetimeBudgetPaise,
+    durationDays: Math.max(1, Math.round(daysBetween(start, c.endAt))),
+    treatedUsers,
+    freqCapDay: c.freqCapDay,
+  });
+}
+
 /** Preconditions for going live. Throws with every blocking reason. */
-async function assertLaunchable(session: Session, c: Pick<Campaign, "personaKey" | "headline" | "body" | "cta" | "landingUrl" | "dailyBudgetPaise" | "endAt">) {
+async function assertLaunchable(session: Session, c: LaunchFields, ab: AbConfig | null) {
   const problems: string[] = [];
   const stats = await audienceStats(db, session.workspace, c.personaKey as PersonaKey, session.simNow);
   if (stats.eligible < MIN_AUDIENCE) problems.push(`Audience has ${stats.eligible} reachable people. The minimum is ${MIN_AUDIENCE}, because smaller audiences can't produce a reliable result.`);
   const policy = checkCreative(c);
   problems.push(...policy.errors);
+  if (ab) {
+    problems.push(...checkCreative({ ...ab, landingUrl: c.landingUrl }).errors.map((e) => `Variant B: ${e}`));
+    if (ab.headline === c.headline && ab.body === c.body && ab.cta === c.cta) problems.push("Variant B is identical to variant A. Change the headline, description or button.");
+    problems.push(...abPlanFor(session, c, ab, stats.treated).problems.map((p) => `A/B test: ${p}`));
+  }
   const wallet = await walletSummary(db, session.workspace.id);
   if (wallet.availablePaise < c.dailyBudgetPaise) problems.push(`Wallet has ${formatINR(Math.max(0, wallet.availablePaise))} available, less than one day of budget (${formatINR(c.dailyBudgetPaise)}). Top up first.`);
   if (c.endAt <= session.simNow) problems.push("End date is in the past.");
@@ -75,7 +112,9 @@ async function assertLaunchable(session: Session, c: Pick<Campaign, "personaKey"
 }
 
 async function goLive(session: Session, c: Campaign, action: string): Promise<Campaign> {
-  const stats = await assertLaunchable(session, c);
+  const test = await db.abTest.findUnique({ where: { campaignId: c.id } });
+  const ab = test?.status === "draft" ? { headline: test.bHeadline, body: test.bBody, cta: test.bCta, mdePct: test.mdePct } : null;
+  const stats = await assertLaunchable(session, c, ab);
   const startsLater = c.startAt.getTime() > session.simNow.getTime() + MINUTE;
   const { externalId } = await withRetry(() =>
     getAdapter().launch({
@@ -101,17 +140,46 @@ async function goLive(session: Session, c: Campaign, action: string): Promise<Ca
       landingUrl: withUtm(c.landingUrl, c.code),
     },
   });
+  let abNote = "";
+  if (test && ab) {
+    const plan = abPlanFor(session, c, ab, stats.treated);
+    await db.abTest.update({
+      where: { id: test.id },
+      data: {
+        status: "running",
+        aHeadline: c.headline,
+        aBody: c.body,
+        aCta: c.cta,
+        baselineCtr: plan.baselineCtr,
+        samplePerVariant: plan.samplePerVariant,
+        testBudgetCapPaise: plan.testBudgetCapPaise,
+        simTrueEffect: simTrueEffect(test.id),
+        startedAt: startAt,
+      },
+    });
+    abNote = `; A/B test needs ${plan.samplePerVariant.toLocaleString("en-IN")} impressions per variant (test budget cap ${formatINR(plan.testBudgetCapPaise)})`;
+  }
   await audit(db, {
     workspaceId: session.workspace.id,
     actor: session.actor,
     action,
     entityType: "campaign",
     entityId: c.id,
-    summary: `${c.code} ${startsLater ? "scheduled" : "launched"}: ${formatINR(c.dailyBudgetPaise)}/day, cap ${formatINR(c.lifetimeBudgetPaise)}, ${stats.treated} people (+${stats.holdout} holdout)`,
+    summary: `${c.code} ${startsLater ? "scheduled" : "launched"}: ${formatINR(c.dailyBudgetPaise)}/day, cap ${formatINR(c.lifetimeBudgetPaise)}, ${stats.treated} people (+${stats.holdout} holdout)${abNote}`,
     after: { status: updated.status, externalId },
     at: session.simNow,
   });
   return updated;
+}
+
+/** Keep a draft's A/B test config in sync with the wizard (create, update or remove). */
+async function syncDraftAbTest(campaignId: string, ab: AbConfig | null | undefined): Promise<void> {
+  if (!ab) {
+    await db.abTest.deleteMany({ where: { campaignId, status: "draft" } });
+    return;
+  }
+  const data = { mdePct: ab.mdePct, bHeadline: ab.headline, bBody: ab.body, bCta: ab.cta };
+  await db.abTest.upsert({ where: { campaignId }, create: { campaignId, ...data }, update: data });
 }
 
 export async function saveCampaign(session: Session, raw: unknown, opts: { id?: string; launch: boolean }): Promise<Campaign> {
@@ -144,7 +212,8 @@ export async function saveCampaign(session: Session, raw: unknown, opts: { id?: 
   };
 
   // Validate launch preconditions BEFORE writing, so a failed launch never leaves a stray draft.
-  if (opts.launch) await assertLaunchable(session, data);
+  const ab = v.abTest ?? null;
+  if (opts.launch) await assertLaunchable(session, data, ab);
 
   let campaign: Campaign;
   if (opts.id) {
@@ -159,6 +228,7 @@ export async function saveCampaign(session: Session, raw: unknown, opts: { id?: 
     });
     await audit(db, { workspaceId: session.workspace.id, actor: session.actor, action: "campaign.created", entityType: "campaign", entityId: campaign.id, summary: `${campaign.code} "${campaign.name}" created`, at: session.simNow });
   }
+  await syncDraftAbTest(campaign.id, ab);
 
   if (v.suggestionId && v.suggestionDecision) {
     const s = await db.aiSuggestion.findFirst({ where: { id: v.suggestionId, workspaceId: session.workspace.id } });
@@ -180,7 +250,7 @@ export async function saveCampaign(session: Session, raw: unknown, opts: { id?: 
   if (!opts.launch) return campaign;
 
   if (needsApproval(session.role, campaign.lifetimeBudgetPaise)) {
-    await assertLaunchable(session, campaign);
+    await assertLaunchable(session, campaign, ab);
     const pending = await db.campaign.update({
       where: { id: campaign.id },
       data: { status: "pending_approval", statusReason: `Lifetime budget above ${formatINR(APPROVAL_THRESHOLD_PAISE)} needs Owner/Admin approval` },
@@ -202,7 +272,8 @@ export async function launchDraft(session: Session, id: string): Promise<Campaig
   const c = await load(session, id);
   if (c.status !== "draft") throw conflict(`Campaign is ${c.status}, not a draft`);
   if (needsApproval(session.role, c.lifetimeBudgetPaise)) {
-    await assertLaunchable(session, c);
+    const t = await db.abTest.findUnique({ where: { campaignId: c.id } });
+    await assertLaunchable(session, c, t ? { headline: t.bHeadline, body: t.bBody, cta: t.bCta, mdePct: t.mdePct } : null);
     return db.campaign.update({ where: { id }, data: { status: "pending_approval", statusReason: "Needs Owner/Admin approval" } });
   }
   return goLive(session, c, "campaign.launched");
@@ -252,6 +323,35 @@ export async function stopCampaign(session: Session, id: string): Promise<Campai
   if (c.externalId) await withRetry(() => getAdapter().stop(c.externalId!));
   const updated = await db.campaign.update({ where: { id }, data: { status: "stopped", statusReason: `Stopped by ${session.user.name}` } });
   await audit(db, { workspaceId: session.workspace.id, actor: session.actor, action: "campaign.stopped", entityType: "campaign", entityId: id, summary: `${c.code} stopped permanently`, before: { status: c.status }, after: { status: "stopped" }, at: session.simNow });
+  await endTestEarly(db, id, "the campaign was stopped before both variants reached the planned sample.", session.simNow, { workspaceId: session.workspace.id, code: c.code });
+  return updated;
+}
+
+/** Switch a campaign's creative to variant B after B won its A/B test. Suggest-only: a person must click. */
+export async function applyAbWinner(session: Session, id: string): Promise<Campaign> {
+  assertCan(session.role, "campaign:launch");
+  const c = await load(session, id);
+  const t = await db.abTest.findUnique({ where: { campaignId: id } });
+  if (!t || t.status !== "complete") throw conflict("This campaign has no finished A/B test");
+  if (t.verdict !== "b_wins") throw conflict("Variant B didn't win, so there's nothing to switch to");
+  if (t.winnerAppliedAt) throw conflict("Variant B is already in use");
+  if (["completed", "stopped"].includes(c.status)) throw conflict(`Can't change the creative of a ${c.status} campaign`);
+  const policy = checkCreative({ headline: t.bHeadline, body: t.bBody, cta: t.bCta, landingUrl: c.landingUrl });
+  if (!policy.ok) throw unprocessable("Variant B no longer passes the policy check", policy.errors);
+  const updated = await db.campaign.update({ where: { id }, data: { headline: t.bHeadline, body: t.bBody, cta: t.bCta } });
+  await db.abTest.update({ where: { id: t.id }, data: { winnerAppliedAt: session.simNow } });
+  await db.alert.updateMany({ where: { campaignId: id, kind: "ab_test_complete", status: "open" }, data: { status: "actioned" } });
+  await audit(db, {
+    workspaceId: session.workspace.id,
+    actor: session.actor,
+    action: "ab_test.winner_applied",
+    entityType: "campaign",
+    entityId: id,
+    summary: `${c.code} switched to A/B winner (variant B): "${t.bHeadline}"`,
+    before: { headline: c.headline, body: c.body, cta: c.cta },
+    after: { headline: t.bHeadline, body: t.bBody, cta: t.bCta },
+    at: session.simNow,
+  });
   return updated;
 }
 
@@ -285,6 +385,9 @@ export async function cloneCampaign(session: Session, id: string): Promise<Campa
       clonedFromId: c.id,
     },
   });
+  const test = await db.abTest.findUnique({ where: { campaignId: c.id } });
+  // Copy the test setup, unless B already won and became the creative (A and B would be identical).
+  if (test && !test.winnerAppliedAt) await syncDraftAbTest(copy.id, { headline: test.bHeadline, body: test.bBody, cta: test.bCta, mdePct: test.mdePct });
   await audit(db, { workspaceId: session.workspace.id, actor: session.actor, action: "campaign.cloned", entityType: "campaign", entityId: copy.id, summary: `${copy.code} cloned from ${c.code}`, at: session.simNow });
   return copy;
 }

@@ -24,6 +24,23 @@ export interface SimCampaign {
   bench: Benchmark;
   aovPaise: number;
   totalSpendPaise: number;
+  /** Running A/B test, if any. Test traffic is split between variants until each has its sample. */
+  ab?: SimAbTest;
+}
+
+export interface SimAbTest {
+  ctrMultiplierB: number; // 1 + hidden true effect of variant B
+  needA: number; // impressions still needed for variant A
+  needB: number;
+  budgetLeftPaise: number; // test budget cap minus test spend so far
+}
+
+export interface AbDelta {
+  impressionsA: number;
+  clicksA: number;
+  impressionsB: number;
+  clicksB: number;
+  spendPaise: number;
 }
 
 export interface DayStat {
@@ -49,9 +66,19 @@ export interface SimResult {
   ended: boolean;
   reachedLifetimeCap: boolean;
   walletExhausted: boolean;
+  ab: AbDelta | null;
 }
 
 export const STEP_MINUTES = 15;
+
+/** Clicks observed from `n` impressions at true CTR `p`: binomial sampling noise (normal approx). */
+function noisyClicks(n: number, p: number, rng: () => number): number {
+  if (n <= 0) return 0;
+  const u1 = Math.max(1e-12, rng());
+  const u2 = rng();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  return Math.max(0, n * p + z * Math.sqrt(n * p * (1 - p)));
+}
 
 /**
  * Simulate delivery over [from, to). `dayStats` (keyed by IST day) is read and mutated so
@@ -70,6 +97,8 @@ export function simulateDelivery(
   let spent = 0;
   let reachedLifetimeCap = false;
   let walletExhausted = false;
+  const ab = c.ab ? { ...c.ab } : null;
+  const abDelta: AbDelta | null = ab ? { impressionsA: 0, clicksA: 0, impressionsB: 0, clicksB: 0, spendPaise: 0 } : null;
 
   let t = Math.max(from.getTime(), c.startAt.getTime());
   const stop = Math.min(to.getTime(), c.endAt.getTime());
@@ -113,6 +142,22 @@ export function simulateDelivery(
       const ctr = c.bench.ctr * fatigue * (0.9 + 0.2 * rng());
       clicks = spend / cpc;
       impressions = clicks / ctr;
+
+      // A/B split: while the test needs traffic (and has test budget left), test spend goes to
+      // whichever variants still need impressions; any spend beyond the test cap serves A only.
+      const abOn = ab !== null && (ab.needA > 0 || ab.needB > 0) && ab.budgetLeftPaise > 0.5;
+      let impsA = 0;
+      let impsB = 0;
+      let testSpend = 0;
+      const ctrB = ab ? ctr * ab.ctrMultiplierB : ctr;
+      if (abOn && ab) {
+        testSpend = Math.min(spend, ab.budgetLeftPaise);
+        const wA = ab.needA > 0 ? (ab.needB > 0 ? 0.5 : 1) : 0;
+        impsA = (testSpend * wA) / cpc / ctr;
+        impsB = (testSpend * (1 - wA)) / cpc / ctrB;
+        impressions = impsA + impsB + (spend - testSpend) / cpc / ctr;
+      }
+
       // Frequency cap (channel-side): at most treatedUsers × cap impressions per day.
       const remainingImps = Math.max(0, c.treatedUsers * c.freqCapDay - ds.impressions);
       if (impressions > remainingImps) {
@@ -120,6 +165,24 @@ export function simulateDelivery(
         impressions *= k;
         clicks *= k;
         spend *= k;
+        impsA *= k;
+        impsB *= k;
+        testSpend *= k;
+      }
+
+      if (abOn && ab && abDelta) {
+        const clicksA = noisyClicks(impsA, ctr, rng);
+        const clicksB = noisyClicks(impsB, ctrB, rng);
+        const restImps = impressions - impsA - impsB;
+        clicks = clicksA + clicksB + restImps * ctr;
+        abDelta.impressionsA += impsA;
+        abDelta.clicksA += clicksA;
+        abDelta.impressionsB += impsB;
+        abDelta.clicksB += clicksB;
+        abDelta.spendPaise += testSpend;
+        ab.needA -= impsA;
+        ab.needB -= impsB;
+        ab.budgetLeftPaise -= testSpend;
       }
       const cvr = c.bench.cvr * (peak?.cvrFactor ?? 1) * (0.75 + 0.5 * rng());
       conversions = clicks * cvr;
@@ -167,5 +230,6 @@ export function simulateDelivery(
     ended: to.getTime() >= c.endAt.getTime(),
     reachedLifetimeCap,
     walletExhausted,
+    ab: abDelta,
   };
 }

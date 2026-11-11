@@ -1,19 +1,10 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Card, CardBody, PageHeader } from "@/components/ui";
 
+/** Features that have shipped since their "coming soon" page went up. */
+const SHIPPED: Record<string, string> = { "ab-testing": "/ab-tests" };
+
 const FEATURES: Record<string, { title: string; when: string; summary: string; scope: string[] }> = {
-  "ab-testing": {
-    title: "A/B Testing",
-    when: "Planned for Q4",
-    summary: "Test two creatives or two audiences against each other with an honest answer: a winner, or 'inconclusive'.",
-    scope: [
-      "Up to 2 variants, one variable at a time (creative or audience)",
-      "Sample size fixed before launch (80% power, 5% significance, your minimum detectable effect)",
-      "No peeking: a winner is declared only once the planned sample is reached",
-      "Test budget capped at 20% of the campaign budget",
-      "Results shown as 'inconclusive' when the data can't separate the variants",
-    ],
-  },
   "ad-studio": {
     title: "Ad Studio (AI copywriting)",
     when: "Planned for Q4",
@@ -29,6 +20,7 @@ const FEATURES: Record<string, { title: string; when: string; summary: string; s
 
 export default async function ComingSoon({ params }: { params: Promise<{ feature: string }> }) {
   const { feature } = await params;
+  if (SHIPPED[feature]) redirect(SHIPPED[feature]);
   const f = FEATURES[feature];
   if (!f) notFound();
   return (

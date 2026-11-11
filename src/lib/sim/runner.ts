@@ -1,4 +1,5 @@
 import type { Campaign, PrismaClient, Workspace } from "@prisma/client";
+import { endTestEarly, recordAbDelivery, simAbFor } from "../abtest-service";
 import { audit, SYSTEM } from "../audit";
 import { getBenchmark } from "../benchmarks";
 import { peakForDay } from "../calendar";
@@ -68,11 +69,14 @@ export async function runSimulation(db: PrismaClient, ws: Workspace, to: Date): 
   const live = await db.campaign.findMany({ where: { workspaceId: ws.id, status: "live" }, orderBy: { startAt: "asc" } });
   let pool = (await walletSummary(db, ws.id)).availablePaise;
   let walletExhausted = pool <= 0 && live.length > 0;
+  const tests = live.length ? await db.abTest.findMany({ where: { campaignId: { in: live.map((c) => c.id) }, status: "running" } }) : [];
+  const testByCampaign = new Map(tests.map((t) => [t.campaignId, t]));
 
   for (const c of live) {
     const from = c.simulatedUntil ?? c.startAt;
     if (from >= to || walletExhausted) continue;
     const dayStats = await loadDayStats(db, c.id, from);
+    const test = testByCampaign.get(c.id);
     const res = simulateDelivery(
       {
         id: c.id,
@@ -86,6 +90,7 @@ export async function runSimulation(db: PrismaClient, ws: Workspace, to: Date): 
         bench: getBenchmark(ws.category, c.personaKey as PersonaKey),
         aovPaise: ws.aovPaise,
         totalSpendPaise: c.totalSpendPaise,
+        ab: simAbFor(test),
       },
       from,
       to,
@@ -95,9 +100,11 @@ export async function runSimulation(db: PrismaClient, ws: Workspace, to: Date): 
     pool -= res.spentPaise;
     await persistDeltas(db, c.id, res.deltas);
     const totalSpendPaise = c.totalSpendPaise + Math.round(res.spentPaise);
+    if (test && res.ab) await recordAbDelivery(db, test, res.ab, to, { workspaceId: ws.id, code: c.code });
 
     if (res.reachedLifetimeCap || res.ended) {
       const reason = res.reachedLifetimeCap ? "Lifetime budget fully spent" : "Reached end date";
+      await endTestEarly(db, c.id, "the campaign ended before both variants reached the planned sample.", to, { workspaceId: ws.id, code: c.code });
       await db.campaign.update({ where: { id: c.id }, data: { totalSpendPaise, simulatedUntil: to, status: "completed", statusReason: reason } });
       await createAlert(db, ws.id, c.id, "lifetime_cap", "info", `${c.code} completed: ${reason.toLowerCase()}.`, null, true, to);
       await audit(db, { workspaceId: ws.id, actor: SYSTEM, action: "campaign.completed", entityType: "campaign", entityId: c.id, summary: `${c.code} completed (${reason})`, at: to });

@@ -13,6 +13,7 @@ The MVP demo is built (see README). Remaining tickets are ordered by the rollout
 - T-08 Dashboard, lift card, NSM, campaign history filters
 - T-09 Smart Personas, Template Hub, Pixel health, Wallet, Audit log pages
 - T-10 Unit tests for engine, suggester, stats, policy, RBAC, calendar (25 tests)
+- T-19 A/B Testing: creative A vs B on CTR; `AbTest` model; pre-launch power calc (80% power, 5% significance, chosen MDE); test capped at 20% of lifetime budget; fixed horizon with interim results withheld server-side; A wins / B wins / inconclusive; suggest-only "switch to B"; `/ab-tests` page; 16 unit tests (power calc, decision rule, A/A false-positive rate vs peeking, simulator split). Audience tests deferred: two personas are different populations, not a randomised split.
 
 ## Next
 
@@ -26,7 +27,6 @@ The MVP demo is built (see README). Remaining tickets are ordered by the rollout
 | T-16 Report export (D5) | CSV + printable report per campaign / date range | `src/app/api/reports/*` | Totals match dashboard to the rupee | Snapshot test |
 | T-17 Refunds | Wallet withdrawal request flow (Owner), ledger `refund` entries | wallet service, page | Balance never negative; audit entry | Unit |
 | T-18 Budget Suggester backtest | Replay completed campaigns; compare rules vs "same as last time" | `scripts/backtest.ts` | Report of error vs baseline | — |
-| T-19 A/B Testing (Q4) | Variant model, pre-launch sample-size calculator, fixed-horizon test, "inconclusive" state | schema, wizard step, monitor | Winner only declared at planned n | Power-calc unit tests |
 | T-20 Ad Studio (Q4) | `LLMProvider` interface + mock; Claude provider; policy check on every output | `src/lib/ai/ad-studio/*` | No PII in prompts; all outputs policy-checked | Prompt-redaction tests |
 | T-21 Real integrations | Media.net adapter, Shopify app sync, Razorpay webhooks | `src/lib/channels/medianet.ts`, etc. | Behind feature flags; mock remains default | Contract tests |
 

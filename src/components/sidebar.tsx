@@ -8,6 +8,7 @@ import { cn } from "./ui";
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: BarChart3 },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
+  { href: "/ab-tests", label: "A/B tests", icon: FlaskConical },
   { href: "/audiences", label: "Smart Personas", icon: Users },
   { href: "/templates", label: "Template Hub", icon: LayoutTemplate },
   { href: "/pixel", label: "Pixel health", icon: Radio },
@@ -16,7 +17,6 @@ const NAV = [
 ];
 
 const LATER = [
-  { href: "/coming-soon/ab-testing", label: "A/B Testing", icon: FlaskConical, when: "Q4" },
   { href: "/coming-soon/ad-studio", label: "Ad Studio (AI)", icon: Sparkles, when: "Q4" },
 ];
 

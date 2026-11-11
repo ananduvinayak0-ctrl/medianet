@@ -9,6 +9,7 @@ import type { MonitorData } from "@/lib/monitor";
 import { HourlyLine } from "../charts";
 import { LiftCard } from "../campaign-bits";
 import { Badge, Button, Card, CardBody, CardHeader, ProgressBar, Stat } from "../ui";
+import { AbTestCard } from "./ab-test-card";
 
 const POLL_MS = 5000;
 
@@ -173,6 +174,8 @@ export function LiveMonitor({ initial, canAct }: { initial: MonitorData; canAct:
           </Card>
         </div>
       )}
+
+      {data.abTest && <AbTestCard test={data.abTest} campaignId={c.id} campaignStatus={c.status} canAct={canAct} />}
 
       {t.spendPaise > 0 && <LiftCard lift={data.lift} scope={`${formatNum(c.treatedUsers)} people could see ads; ${formatNum(c.holdoutUsers)} were held out. Same brand-level holdout across all campaigns.`} />}
     </div>

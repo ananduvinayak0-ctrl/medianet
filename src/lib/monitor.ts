@@ -1,3 +1,5 @@
+import type { AbTestView } from "./abtest";
+import { toAbView } from "./abtest-service";
 import { db } from "./db";
 import { LEARNING_CONVERSIONS, LEARNING_HOURS } from "./domain";
 import { notFound } from "./errors";
@@ -35,14 +37,16 @@ export interface MonitorData {
   alerts: { id: string; kind: string; severity: string; message: string; recommendation: string | null; autoActioned: boolean; createdAt: string }[];
   learning: boolean;
   liveHours: number;
+  abTest: AbTestView | null;
 }
 
 export async function getMonitor(session: Session, id: string): Promise<MonitorData> {
   const c = await db.campaign.findFirst({ where: { id, workspaceId: session.workspace.id } });
   if (!c) throw notFound("Campaign not found");
-  const [buckets, alerts] = await Promise.all([
+  const [buckets, alerts, test] = await Promise.all([
     db.metricBucket.findMany({ where: { campaignId: id }, orderBy: { bucketStart: "asc" } }),
     db.alert.findMany({ where: { campaignId: id, status: "open" }, orderBy: { createdAt: "desc" } }),
+    db.abTest.findUnique({ where: { campaignId: id } }),
   ]);
   const now = session.simNow;
   const totals = sumBuckets(buckets);
@@ -89,5 +93,6 @@ export async function getMonitor(session: Session, id: string): Promise<MonitorD
     alerts: alerts.map((a) => ({ id: a.id, kind: a.kind, severity: a.severity, message: a.message, recommendation: a.recommendation, autoActioned: a.autoActioned, createdAt: a.createdAt.toISOString() })),
     learning: c.status === "live" && liveHours < LEARNING_HOURS && totals.conversions < LEARNING_CONVERSIONS,
     liveHours,
+    abTest: test ? toAbView(test, c) : null,
   };
 }

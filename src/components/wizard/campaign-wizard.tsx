@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarClock, Check, CheckCircle2, Lock, RefreshCw, ShieldCheck, Target, Undo2, Users, XCircle } from "lucide-react";
+import { AlertTriangle, CalendarClock, Check, CheckCircle2, FlaskConical, Lock, RefreshCw, ShieldCheck, Target, Undo2, Users, XCircle } from "lucide-react";
+import { AB_MAX_BUDGET_SHARE, MDE_OPTIONS, planAbTest, type AbPlan } from "@/lib/abtest";
 import type { BudgetSuggestion } from "@/lib/ai/budget-suggester";
 import { peaksOverlapping } from "@/lib/calendar";
 import { api, ApiError, detailLines } from "@/lib/client";
@@ -35,6 +36,15 @@ export interface WizardInitial {
   durationDays: number;
   freqCapDay: number;
   freqCapWeek: number;
+  ab: AbForm;
+}
+
+export interface AbForm {
+  enabled: boolean;
+  headline: string;
+  body: string;
+  cta: string;
+  mdePct: number;
 }
 
 const STEPS = ["Goal", "Audience", "Budget & schedule", "Creative", "Review & launch"] as const;
@@ -51,6 +61,7 @@ export function CampaignWizard(props: {
   canCreate: boolean;
   canLaunch: boolean;
   approvalRole: boolean;
+  benchmarks: Record<PersonaKey, { ctr: number; cpcPaise: number }>;
 }) {
   const router = useRouter();
   const [step, setStep] = useState(0);
@@ -73,6 +84,25 @@ export function CampaignWizard(props: {
   const peaks = peaksOverlapping(startIso.slice(0, 10), endIso.slice(0, 10));
   const walletShort = props.walletAvailablePaise < f.dailyBudgetRupees * 100;
   const needsApproval = props.approvalRole && lifetimeRupees * 100 > APPROVAL_THRESHOLD_PAISE;
+
+  const setAb = (patch: Partial<AbForm>) => setF((s) => ({ ...s, ab: { ...s.ab, ...patch } }));
+  const abPolicy = useMemo(() => checkCreative({ headline: f.ab.headline, body: f.ab.body, cta: f.ab.cta, landingUrl: f.landingUrl }), [f.ab.headline, f.ab.body, f.ab.cta, f.landingUrl]);
+  const abSame = f.ab.headline.trim() === f.headline.trim() && f.ab.body.trim() === f.body.trim() && f.ab.cta === f.cta;
+  const abPlan = useMemo(
+    () =>
+      planAbTest({
+        bench: props.benchmarks[f.personaKey],
+        mdePct: f.ab.mdePct,
+        dailyBudgetPaise: f.dailyBudgetRupees * 100,
+        lifetimeBudgetPaise: lifetimeRupees * 100,
+        durationDays: f.durationDays,
+        treatedUsers: stats.treated,
+        freqCapDay: f.freqCapDay,
+      }),
+    [props.benchmarks, f.personaKey, f.ab.mdePct, f.dailyBudgetRupees, lifetimeRupees, f.durationDays, stats.treated, f.freqCapDay],
+  );
+  const abOk = !f.ab.enabled || (abPolicy.ok && !abSame);
+  const abFeasible = !f.ab.enabled || abPlan.problems.length === 0;
 
   const fetchSuggestion = useCallback(async () => {
     setSugLoading(true);
@@ -115,7 +145,7 @@ export function CampaignWizard(props: {
     f.name.trim().length >= 3,
     stats.eligible >= MIN_AUDIENCE,
     f.dailyBudgetRupees >= 500 && f.durationDays >= 1 && f.durationDays <= 90 && f.freqCapWeek >= f.freqCapDay,
-    policy.ok,
+    policy.ok && abOk,
     true,
   ];
 
@@ -141,6 +171,7 @@ export function CampaignWizard(props: {
       freqCapWeek: f.freqCapWeek,
       suggestionId,
       suggestionDecision: suggestionId ? (decision ?? "rejected") : undefined,
+      abTest: f.ab.enabled ? { headline: f.ab.headline, body: f.ab.body.replace("{offer}", f.offerCode || "{offer}"), cta: f.ab.cta, mdePct: f.ab.mdePct } : null,
     };
     try {
       const c = f.draftId
@@ -372,6 +403,7 @@ export function CampaignWizard(props: {
         )}
 
         {step === 3 && (
+          <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
             <Card>
               <CardBody className="space-y-4">
@@ -431,6 +463,17 @@ export function CampaignWizard(props: {
               <p className="text-xs text-slate-500">Also rendered as {template.formats.join(", ")}.</p>
             </div>
           </div>
+          <AbSection
+            ab={f.ab}
+            setAb={setAb}
+            enable={() => setAb({ enabled: true, headline: f.ab.headline || f.headline, body: f.ab.body || f.body, cta: f.ab.cta || f.cta })}
+            policy={abPolicy}
+            same={abSame}
+            plan={abPlan}
+            templateKey={f.templateKey}
+            offerCode={f.offerCode}
+          />
+          </div>
         )}
 
         {step === 4 && (
@@ -444,6 +487,7 @@ export function CampaignWizard(props: {
                 <Row k="Frequency cap" v={`${f.freqCapDay}/day · ${f.freqCapWeek}/week`} />
                 <Row k="Creative" v={`${template.name}${f.offerCode ? ` · code ${f.offerCode}` : ""}`} />
                 <Row k="AI suggestion" v={suggestion ? (decision ?? "shown, not used") : "not requested"} />
+                <Row k="A/B test" v={f.ab.enabled ? `Creative A vs B · ${formatNum(abPlan.samplePerVariant)} impressions each · ≥${f.ab.mdePct}% CTR difference` : "off"} />
                 <Row k="Channel" v="Media.net network (mock adapter)" />
               </dl>
               <ul className="space-y-2 text-sm">
@@ -451,6 +495,18 @@ export function CampaignWizard(props: {
                 <Check2 ok={policy.ok} text={policy.ok ? "Creative passes automated policy checks" : `Creative has ${policy.errors.length} policy issue(s). Fix them in step 4.`} />
                 <Check2 ok={!walletShort} text={walletShort ? "Wallet covers less than one day of budget. Top up before launching." : "Wallet covers at least one day of budget"} />
                 <Check2 ok text="10% brand holdout applied, so we can show real incremental lift" />
+                {f.ab.enabled && (
+                  <Check2
+                    ok={abFeasible && abOk}
+                    text={
+                      !abOk
+                        ? "Variant B needs fixing in step 4."
+                        : abFeasible
+                          ? `A/B test fits: about ${formatINR(abPlan.estCostPaise)} of test delivery (cap ${formatINR(abPlan.testBudgetCapPaise)}), about ${abPlan.estDays} day(s)`
+                          : `A/B test can't run as planned: ${abPlan.problems[0]}`
+                    }
+                  />
+                )}
                 {needsApproval && <Check2 warn text={`Lifetime budget is above ${formatINR(APPROVAL_THRESHOLD_PAISE)}. As an Editor, this goes to an Owner/Admin for approval.`} />}
                 {peaks.length > 0 && <Check2 warn text={`Overlaps ${peaks[0].name}. Expect higher click costs.`} />}
               </ul>
@@ -466,7 +522,7 @@ export function CampaignWizard(props: {
                 </Callout>
               )}
               <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => submit(true)} disabled={!props.canLaunch || submitting !== null || !stepValid.every(Boolean)}>
+                <Button type="button" onClick={() => submit(true)} disabled={!props.canLaunch || submitting !== null || !stepValid.every(Boolean) || !abFeasible}>
                   {!props.canLaunch && <Lock className="size-4" aria-hidden />}
                   {submitting === "launch" ? "Launching…" : needsApproval ? "Send for approval" : f.startImmediately ? "Launch campaign" : "Schedule campaign"}
                 </Button>
@@ -511,6 +567,122 @@ function Check2({ ok, warn, text }: { ok?: boolean; warn?: boolean; text: string
       <Icon className={`mt-0.5 size-4 shrink-0 ${color}`} aria-hidden />
       <span>{text}</span>
     </li>
+  );
+}
+
+function AbSection(props: {
+  ab: AbForm;
+  setAb: (p: Partial<AbForm>) => void;
+  enable: () => void;
+  policy: ReturnType<typeof checkCreative>;
+  same: boolean;
+  plan: AbPlan;
+  templateKey: string;
+  offerCode: string;
+}) {
+  const { ab, setAb, plan } = props;
+  return (
+    <Card>
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 font-medium text-slate-900">
+              <FlaskConical className="size-4 text-brand-600" aria-hidden /> A/B test this creative <Badge tone="neutral">optional</Badge>
+            </div>
+            <p className="mt-0.5 text-sm text-slate-600">
+              Write a second version (B) and we&apos;ll split test traffic 50/50 to see which gets clicked more. One honest answer at the end: A wins, B wins, or inconclusive.
+            </p>
+          </div>
+          <Button type="button" size="sm" variant={ab.enabled ? "secondary" : "primary"} onClick={() => (ab.enabled ? setAb({ enabled: false }) : props.enable())} aria-pressed={ab.enabled}>
+            {ab.enabled ? "Remove test" : "Add variant B"}
+          </Button>
+        </div>
+
+        {ab.enabled && (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
+            <div className="space-y-4">
+              <Hint className="mt-0">Change one thing at a time (for example only the headline), so you know what made the difference. Template, landing page and offer stay the same as A.</Hint>
+              <div>
+                <Label htmlFor="ab-hl">Variant B headline</Label>
+                <Input id="ab-hl" value={ab.headline} onChange={(e) => setAb({ headline: e.target.value })} />
+                <Hint className={ab.headline.length > LIMITS.headline ? "text-red-600" : ""}>
+                  {ab.headline.length}/{LIMITS.headline}
+                </Hint>
+              </div>
+              <div>
+                <Label htmlFor="ab-bd">Variant B description</Label>
+                <Textarea id="ab-bd" rows={2} value={ab.body} onChange={(e) => setAb({ body: e.target.value })} />
+                <Hint className={ab.body.length > LIMITS.body ? "text-red-600" : ""}>
+                  {ab.body.length}/{LIMITS.body}
+                </Hint>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="ab-cta">Variant B button</Label>
+                  <Select id="ab-cta" value={ab.cta} onChange={(e) => setAb({ cta: e.target.value })}>
+                    {ALLOWED_CTAS.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="ab-mde">Smallest difference worth detecting</Label>
+                  <Select id="ab-mde" value={ab.mdePct} onChange={(e) => setAb({ mdePct: Number(e.target.value) })}>
+                    {MDE_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}% better or worse CTR
+                      </option>
+                    ))}
+                  </Select>
+                  <Hint>Smaller differences need far more impressions to detect.</Hint>
+                </div>
+              </div>
+
+              <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+                <div className="font-medium text-slate-900">Test plan (fixed before launch)</div>
+                <dl className="tabular mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                  <div>
+                    <dt className="text-xs text-slate-500">Impressions per variant</dt>
+                    <dd className="font-semibold">{formatNum(plan.samplePerVariant)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Est. test cost</dt>
+                    <dd className="font-semibold">{formatINR(plan.estCostPaise)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Test budget cap ({AB_MAX_BUDGET_SHARE * 100}%)</dt>
+                    <dd className="font-semibold">{formatINR(plan.testBudgetCapPaise)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Est. duration</dt>
+                    <dd className="font-semibold">{Number.isFinite(plan.estDays) ? `${plan.estDays} day(s)` : "—"}</dd>
+                  </div>
+                </dl>
+                <p className="mt-2 text-xs text-slate-500">
+                  80% chance of detecting a real {ab.mdePct}% difference, 5% chance of a false winner. Results stay hidden until both variants reach the sample, because checking early inflates false winners.
+                </p>
+              </div>
+
+              {plan.problems.length > 0 && (
+                <Callout tone="red" title="This test can't run as planned">
+                  <ul className="list-disc pl-5">
+                    {plan.problems.map((p) => (
+                      <li key={p}>{p}</li>
+                    ))}
+                  </ul>
+                </Callout>
+              )}
+              {props.same && <Callout tone="amber" title="Variant B is identical to A">Change the headline, description or button to have something to test.</Callout>}
+              {!props.same && <PolicyBox policy={props.policy} />}
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-slate-700">Variant B preview</div>
+              <AdPreview templateKey={props.templateKey} headline={ab.headline} body={ab.body} cta={ab.cta} offerCode={props.offerCode} />
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 

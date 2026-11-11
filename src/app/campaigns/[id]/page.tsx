@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
 import { AdPreview, StatusBadge } from "@/components/campaign-bits";
+import { AbTestCard } from "@/components/campaign/ab-test-card";
 import { CampaignActions } from "@/components/campaign/actions";
 import { BudgetEditor } from "@/components/campaign/budget-editor";
 import { LiveMonitor } from "@/components/campaign/live-monitor";
@@ -76,9 +77,12 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_340px]">
         <div className="min-w-0">
           {["draft", "pending_approval"].includes(c.status) ? (
-            <Card>
-              <CardBody className="text-sm text-slate-600">The Live Monitor starts once the campaign launches.</CardBody>
-            </Card>
+            <div className="space-y-4">
+              <Card>
+                <CardBody className="text-sm text-slate-600">The Live Monitor starts once the campaign launches.</CardBody>
+              </Card>
+              {monitor.abTest && <AbTestCard test={monitor.abTest} campaignId={c.id} campaignStatus={c.status} canAct={false} />}
+            </div>
           ) : (
             <LiveMonitor initial={monitor} canAct={session.role !== "viewer"} />
           )}

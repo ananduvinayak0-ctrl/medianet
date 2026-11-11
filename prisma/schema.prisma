@@ -135,8 +135,50 @@ model Campaign {
   workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   buckets   MetricBucket[]
   alerts    Alert[]
+  abTest    AbTest?
 
   @@index([workspaceId, status])
+}
+
+// A/B test on a campaign's creative (T-19). Variant A is the campaign's own creative; B changes
+// the copy. Fixed-horizon: sample size is set at launch and a verdict is only computed once both
+// variants reach it. Counters are fractional because the simulator works in expected values.
+model AbTest {
+  id                 String    @id @default(cuid())
+  campaignId         String    @unique
+  variable           String    @default("creative")
+  metric             String    @default("ctr")
+  mdePct             Int // minimum detectable effect, relative %
+  status             String    @default("draft") // draft | running | complete
+  verdict            String? // a_wins | b_wins | inconclusive
+  verdictReason      String?
+  // Variant A snapshot at launch (the campaign creative can later switch to B)
+  aHeadline          String    @default("")
+  aBody              String    @default("")
+  aCta               String    @default("")
+  bHeadline          String
+  bBody              String
+  bCta               String
+  // Plan, fixed at launch
+  baselineCtr        Float     @default(0)
+  samplePerVariant   Int       @default(0)
+  testBudgetCapPaise Int       @default(0)
+  simTrueEffect      Float     @default(0) // mock channel only: hidden true CTR effect of B
+  // Running counters
+  impressionsA       Float     @default(0)
+  clicksA            Float     @default(0)
+  impressionsB       Float     @default(0)
+  clicksB            Float     @default(0)
+  spendPaise         Float     @default(0)
+  // Result (only once complete)
+  pValue             Float?
+  relLift            Float?
+  ciLow              Float?
+  ciHigh             Float?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  winnerAppliedAt    DateTime?
+  campaign           Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 }
 
 // Hourly delivery metrics (IST-aligned hours). Fractional counts are kept as floats

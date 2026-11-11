@@ -1,5 +1,7 @@
 import { CampaignWizard, type WizardInitial } from "@/components/wizard/campaign-wizard";
 import { PageHeader } from "@/components/ui";
+import { DEFAULT_MDE } from "@/lib/abtest";
+import { getBenchmark } from "@/lib/benchmarks";
 import { db } from "@/lib/db";
 import { PERSONA_KEYS, type Objective, type PersonaKey } from "@/lib/domain";
 import { allAudienceStats, getPersona } from "@/lib/personas";
@@ -16,8 +18,18 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
   const [stats, wallet, draft] = await Promise.all([
     allAudienceStats(db, session.workspace, session.simNow),
     walletSummary(db, session.workspace.id),
-    sp.draft ? db.campaign.findFirst({ where: { id: sp.draft, workspaceId: session.workspace.id, status: "draft" } }) : null,
+    sp.draft ? db.campaign.findFirst({ where: { id: sp.draft, workspaceId: session.workspace.id, status: "draft" }, include: { abTest: true } }) : null,
   ]);
+  const benchmarks = Object.fromEntries(
+    PERSONA_KEYS.map((k) => {
+      const b = getBenchmark(session.workspace.category, k);
+      return [k, { ctr: b.ctr, cpcPaise: b.cpcPaise }];
+    }),
+  ) as Record<PersonaKey, { ctr: number; cpcPaise: number }>;
+  const abTest = draft?.abTest;
+  const ab = abTest
+    ? { enabled: true, headline: abTest.bHeadline, body: abTest.bBody, cta: abTest.bCta, mdePct: abTest.mdePct }
+    : { enabled: false, headline: "", body: "", cta: "", mdePct: DEFAULT_MDE };
 
   const pb = getPlaybook(sp.playbook);
   const spPersona = PERSONA_KEYS.includes(sp.persona as PersonaKey) ? (sp.persona as PersonaKey) : undefined;
@@ -47,6 +59,7 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         durationDays: Math.max(1, Math.round((draft.endAt.getTime() - draft.startAt.getTime()) / DAY)),
         freqCapDay: draft.freqCapDay,
         freqCapWeek: draft.freqCapWeek,
+        ab,
       }
     : {
         name: pb ? pb.name : "",
@@ -65,6 +78,7 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         durationDays,
         freqCapDay: pb?.freqCapDay ?? 3,
         freqCapWeek: pb?.freqCapWeek ?? 10,
+        ab,
       };
 
   return (
@@ -81,6 +95,7 @@ export default async function NewCampaignPage({ searchParams }: { searchParams: 
         canCreate={can(session.role, "campaign:create")}
         canLaunch={can(session.role, "campaign:launch")}
         approvalRole={needsApproval(session.role, Number.MAX_SAFE_INTEGER)}
+        benchmarks={benchmarks}
       />
     </>
   );

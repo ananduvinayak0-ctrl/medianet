@@ -1,10 +1,10 @@
 import { route, readJson } from "@/lib/api";
-import { approveCampaign, changeBudget, cloneCampaign, launchDraft, pauseCampaign, resumeCampaign, stopCampaign } from "@/lib/campaign-service";
+import { applyAbWinner, approveCampaign, changeBudget, cloneCampaign, launchDraft, pauseCampaign, resumeCampaign, stopCampaign } from "@/lib/campaign-service";
 import { notFound } from "@/lib/errors";
 import { getSession } from "@/lib/session";
 
 /**
- * POST /api/campaigns/:id/{launch|approve|pause|resume|stop|clone|budget}
+ * POST /api/campaigns/:id/{launch|approve|pause|resume|stop|clone|budget|apply-ab-winner}
  * pause: { note? }   budget: { dailyBudgetRupees, lifetimeBudgetRupees, reason?, alertId? }
  */
 export const POST = route<{ id: string; action: string }>(async (req, { params }) => {
@@ -26,6 +26,8 @@ export const POST = route<{ id: string; action: string }>(async (req, { params }
       return cloneCampaign(session, id);
     case "budget":
       return changeBudget(session, id, body);
+    case "apply-ab-winner":
+      return applyAbWinner(session, id);
     default:
       throw notFound(`Unknown action ${action}`);
   }
