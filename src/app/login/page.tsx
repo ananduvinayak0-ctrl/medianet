@@ -19,11 +19,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <Gauge className="size-7" aria-hidden />
           <div className="leading-tight">
             <div className="text-lg font-semibold">Adbiz</div>
-            <div className="text-sm text-white/80">Self-serve retention ads</div>
+            <div className="text-sm text-white/80">Self-serve campaign tool</div>
           </div>
         </div>
         <div className="my-10 space-y-6">
-          <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">Retention ads that prove they work.</h1>
+          <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">Launch in minutes.<br />Prove every rupee.</h1>
           <ul className="space-y-3 text-white/90">
             <li className="flex gap-3">
               <Users className="mt-0.5 size-5 shrink-0" aria-hidden /> Build audiences from your customers&apos; lifecycle, value and behaviour.
